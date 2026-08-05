@@ -43,6 +43,17 @@ gog --account you@example.com mcp \
   --allow-tool 'docs.*'
 ```
 
+Expose only Gmail draft creation and update:
+
+```bash
+gog --account you@example.com mcp \
+  --allow-write \
+  --allow-tool gmail_create_draft,gmail_update_draft
+```
+
+These tools can store or revise drafts but cannot send them. The MCP catalog
+does not expose Gmail draft sending.
+
 `--allow-write` is always required for write tools. A write tool that matches
 `--allow-tool` is still hidden until `--allow-write` is present.
 
@@ -92,6 +103,10 @@ Accepted selectors:
 | `read` | All read tools |
 | `write` | All write tools, only when `--allow-write` is also set |
 | `*` or `all` | All tools allowed by risk mode |
+
+Service, risk, and wildcard selectors are intentionally open-ended within their
+risk mode: adding a tool in a later release can expand a matching selector.
+Use exact tool names when a persistent policy must remain fixed across upgrades.
 
 Examples:
 
@@ -172,6 +187,8 @@ Write tools, hidden unless `--allow-write`:
 | --- | --- |
 | `docs_write` | Append or replace Google Docs text, optionally as Markdown. |
 | `sheets_update_range` | Update values in a Sheets range from a literal JSON 2D array. |
+| `gmail_create_draft` | Create an unsent Gmail draft from inline text or HTML. |
+| `gmail_update_draft` | Update one unsent Gmail draft while preserving omitted recipients, attachments, and reply context. |
 
 The generated command reference for the server itself is
 [`gog mcp`](commands/gog-mcp.md).
@@ -293,6 +310,26 @@ mcporter call \
 `sheets_update_range.values_json` must be literal JSON. MCP rejects `@file`,
 `@-`, and `-` expansion forms so a model cannot cause the server process to
 read arbitrary local files or stdin.
+
+Create an unsent Gmail draft:
+
+```bash
+mcporter call \
+  --stdio gog \
+  --stdio-arg --account \
+  --stdio-arg you@example.com \
+  --stdio-arg mcp \
+  --stdio-arg --allow-write \
+  --stdio-arg --allow-tool \
+  --stdio-arg gmail_create_draft \
+  gmail_create_draft \
+  '{"subject":"Review notes","body":"Draft only; not sent."}'
+```
+
+Draft tools accept inline `body` or `body_html` content only. They do not
+accept file paths, stdin, attachments, arbitrary arguments, or send actions.
+Both tools require inline text or HTML. Updates also require `subject` unless
+`reply_to_message_id` or `thread_id` supplies reply context.
 
 ## Safety model
 

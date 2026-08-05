@@ -23,6 +23,8 @@ func mcpAllTools() []mcpToolSpec {
 		mcpCalendarEventsTool(),
 		mcpDocsWriteTool(),
 		mcpSheetsUpdateRangeTool(),
+		mcpGmailCreateDraftTool(),
+		mcpGmailUpdateDraftTool(),
 	}
 }
 
@@ -348,6 +350,66 @@ func mcpSheetsUpdateRangeTool() mcpToolSpec {
 				input = "USER_ENTERED"
 			}
 			return []string{"sheets", "update", "--values-json", valuesJSON, "--input", input, "--", spreadsheetID, rangeSpec}, nil
+		},
+	}
+}
+
+func mcpGmailCreateDraftTool() mcpToolSpec {
+	return mcpToolSpec{
+		Name: "gmail_create_draft", Service: "gmail", Risk: mcpRiskWrite,
+		Description: "Create a Gmail draft from inline text or HTML. Never sends mail. Requires --allow-write.",
+		Options: []mcp.ToolOption{
+			mcp.WithString("to", mcp.Description("Recipients (comma-separated)")),
+			mcp.WithString("cc", mcp.Description("CC recipients (comma-separated)")),
+			mcp.WithString("bcc", mcp.Description("BCC recipients (comma-separated)")),
+			mcp.WithString("subject", mcp.Description("Subject (required unless replying/threading)")),
+			mcp.WithString("body", mcp.Description("Plain-text body")),
+			mcp.WithString("body_html", mcp.Description("HTML body")),
+			mcp.WithString("reply_to_message_id", mcp.Description("Reply-to Gmail message ID")),
+			mcp.WithString("thread_id", mcp.Description("Existing Gmail thread ID")),
+			mcp.WithString("reply_to", mcp.Description("Reply-To header")),
+			mcp.WithString("from", mcp.Description("Verified send-as alias")),
+			mcp.WithBoolean("reply_all", mcp.Description("Reply to all; requires a reply target"), mcp.DefaultBool(false)),
+			mcp.WithBoolean("quote", mcp.Description("Quote original; requires a reply target"), mcp.DefaultBool(false)),
+		},
+		BuildArgs: func(req mcp.CallToolRequest) ([]string, error) {
+			args := []string{"gmail", "drafts", "create"}
+			get := func(key string) string { return strings.TrimSpace(req.GetString(key, "")) }
+			to, cc, bcc := get("to"), get("cc"), get("bcc")
+			subject, body, html := get("subject"), req.GetString("body", ""), req.GetString("body_html", "")
+			replyID, threadID, replyTo, from := get("reply_to_message_id"), get("thread_id"), get("reply_to"), get("from")
+			if subject == "" && replyID == "" && threadID == "" {
+				return nil, fmt.Errorf("subject required unless reply_to_message_id or thread_id is set")
+			}
+			if strings.TrimSpace(body) == "" && strings.TrimSpace(html) == "" {
+				return nil, fmt.Errorf("body or body_html is required")
+			}
+			if replyID != "" && threadID != "" {
+				return nil, fmt.Errorf("reply_to_message_id and thread_id are mutually exclusive")
+			}
+			replyAll := req.GetBool("reply_all", false)
+			quote := req.GetBool("quote", false)
+			if (replyAll || quote) && replyID == "" && threadID == "" {
+				return nil, fmt.Errorf("reply_all and quote require reply_to_message_id or thread_id")
+			}
+			for _, pair := range [][2]string{{to, "--to"}, {cc, "--cc"}, {bcc, "--bcc"}, {subject, "--subject"}, {replyID, "--reply-to-message-id"}, {threadID, "--thread-id"}, {replyTo, "--reply-to"}, {from, "--from"}} {
+				if pair[0] != "" {
+					args = append(args, pair[1]+"="+pair[0])
+				}
+			}
+			if strings.TrimSpace(body) != "" {
+				args = append(args, "--body="+body)
+			}
+			if strings.TrimSpace(html) != "" {
+				args = append(args, "--body-html="+html)
+			}
+			if replyAll {
+				args = append(args, "--reply-all")
+			}
+			if quote {
+				args = append(args, "--quote")
+			}
+			return args, nil
 		},
 	}
 }
