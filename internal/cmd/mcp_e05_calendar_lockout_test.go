@@ -97,7 +97,7 @@ func TestMCPE05CalendarOrdinaryArgvContainsNoExcludedFlags(t *testing.T) {
 		"--description", "Weekly planning", "--location", "Room 1", "--start-timezone", "Europe/Rome", "--end-timezone", "America/New_York",
 		"--event-color", "7", "--visibility", "private", "--transparency", "free", "--attendees", "a@example.com,b@example.com",
 		"--rrule", "RRULE:FREQ=WEEKLY", "--reminder", "popup:10", "--reminder", "email:30", "--send-updates", "all",
-		"--guests-can-invite", "--no-guests-can-modify", "--guests-can-see-others", "--", "primary",
+		"--guests-can-invite", "--guests-can-modify=false", "--guests-can-see-others", "--", "primary",
 	}
 	if got := strings.Join(createArgs, "\x00"); got != strings.Join(wantCreate, "\x00") {
 		t.Fatalf("create argv = %#v, want %#v", createArgs, wantCreate)
@@ -133,7 +133,7 @@ func TestMCPE05CalendarOrdinaryArgvContainsNoExcludedFlags(t *testing.T) {
 		"calendar", "update", "--summary", "Planning", "--from", "2026-08-04T09:00:00Z", "--to", "2026-08-04T10:00:00Z",
 		"--start-timezone", "Europe/Rome", "--end-timezone", "America/New_York", "--description", "Weekly planning", "--location", "Room 1",
 		"--attendees", "a@example.com,b@example.com", "--rrule", "RRULE:FREQ=WEEKLY", "--reminder", "popup:10", "--reminder", "email:30",
-		"--event-color", "7", "--visibility", "private", "--transparency", "free", "--guests-can-invite", "--no-guests-can-modify",
+		"--event-color", "7", "--visibility", "private", "--transparency", "free", "--guests-can-invite", "--guests-can-modify=false",
 		"--guests-can-see-others", "--scope", "future", "--original-start", "2026-08-04T09:00:00Z", "--send-updates", "all", "--", "primary", "event-1",
 	}
 	if got := strings.Join(updateArgs, "\x00"); got != strings.Join(wantUpdate, "\x00") {

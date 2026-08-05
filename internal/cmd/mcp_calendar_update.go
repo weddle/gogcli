@@ -179,7 +179,7 @@ func buildMCPCalendarUpdateArgs(req mcp.CallToolRequest) ([]string, error) {
 		if value {
 			args = append(args, field.flag)
 		} else {
-			args = append(args, "--no-"+strings.TrimPrefix(field.flag, "--"))
+			args = append(args, field.flag+"=false")
 		}
 	}
 

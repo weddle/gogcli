@@ -1091,7 +1091,7 @@ func mcpCalendarCreateEventTool() mcpToolSpec {
 					if req.GetBool(item.key, false) {
 						args = append(args, item.flag)
 					} else {
-						args = append(args, "--no-"+strings.TrimPrefix(item.flag, "--"))
+						args = append(args, item.flag+"=false")
 					}
 				}
 			}

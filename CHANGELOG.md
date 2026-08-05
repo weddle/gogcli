@@ -13,7 +13,7 @@
 - MCP: register the explicitly authorized destructive `gmail_delete_draft` tool
   with a closed `draft_id` schema and server-controlled `--force`; drafts are
   permanently deleted and are not recoverable from Trash.
-- MCP: add `calendar_update_event` as an ordinary Write tool with explicit partial-update presence semantics, serialized clears for supported empty summary/description/location/attendees/rrule/reminders/event-color fields, recurring-event scope, and `send_updates=none` by default; integrations, attachments, and specialized Calendar event types remain excluded.
+- MCP: add `calendar_update_event` as an ordinary Write tool with explicit partial-update presence semantics, serialized clears for supported empty summary/description/location/attendees/rrule/reminders/event-color fields, CLI-compatible explicit-false guest-permission flags, recurring-event scope, and `send_updates=none` by default; integrations, attachments, and specialized Calendar event types remain excluded.
 - Drive: add a shared `--max-bytes` raw-content cap to download/export, with inclusive boundary detection and fail-closed temporary output cleanup.
 - MCP: register explicitly authorized destructive `calendar_delete_event` with
   required calendar/event IDs and recurrence scope, conditional

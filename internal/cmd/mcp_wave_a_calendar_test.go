@@ -169,7 +169,7 @@ func TestMCPWaveACalendarWriteAdaptersBuildFocusedArgs(t *testing.T) {
 				"--description", "Weekly planning", "--location", "Room 1", "--timezone", "America/New_York",
 				"--event-color", "7", "--visibility", "private", "--transparency", "transparent", "--all-day",
 				"--attendees", "a@example.com,b@example.com", "--rrule", "RRULE:FREQ=WEEKLY", "--reminder", "popup:10",
-				"--reminder", "email:30", "--send-updates", "all", "--guests-can-invite", "--no-guests-can-modify",
+				"--reminder", "email:30", "--send-updates", "all", "--guests-can-invite", "--guests-can-modify=false",
 				"--guests-can-see-others", "--", "primary",
 			},
 		},
@@ -391,11 +391,11 @@ func TestMCPWaveACalendarGuestBooleanPresence(t *testing.T) {
 		flag  string
 	}{
 		{field: "guests_can_invite", value: true, flag: "--guests-can-invite"},
-		{field: "guests_can_invite", value: false, flag: "--no-guests-can-invite"},
+		{field: "guests_can_invite", value: false, flag: "--guests-can-invite=false"},
 		{field: "guests_can_modify", value: true, flag: "--guests-can-modify"},
-		{field: "guests_can_modify", value: false, flag: "--no-guests-can-modify"},
+		{field: "guests_can_modify", value: false, flag: "--guests-can-modify=false"},
 		{field: "guests_can_see_others", value: true, flag: "--guests-can-see-others"},
-		{field: "guests_can_see_others", value: false, flag: "--no-guests-can-see-others"},
+		{field: "guests_can_see_others", value: false, flag: "--guests-can-see-others=false"},
 	} {
 		t.Run(test.field+"/"+test.flag, func(t *testing.T) {
 			arguments := cloneCalendarArguments(base)
