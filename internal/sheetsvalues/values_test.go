@@ -23,6 +23,28 @@ func TestDecodeStrictPreservesNumbersAndRejectsTrailingContent(t *testing.T) {
 	}
 }
 
+func TestDecodeStrictForRangeEnforcesOnlyFullyConcreteRanges(t *testing.T) {
+	if _, err := DecodeStrictForRange([]byte(`[[1,2,3]]`), "A1:B1"); err == nil {
+		t.Fatal("expected concrete width overflow")
+	}
+
+	if _, err := DecodeStrictForRange([]byte(`[[1],[2],[3]]`), "A1:A2"); err == nil {
+		t.Fatal("expected concrete height overflow")
+	}
+
+	if _, err := DecodeStrictForRange([]byte(`[[1,2],[3,4]]`), "A1:B2"); err != nil {
+		t.Fatalf("exact concrete range: %v", err)
+	}
+
+	for _, rangeSpec := range []string{"A:B", "1:2", "A1:B", "NamedRange"} {
+		t.Run(rangeSpec, func(t *testing.T) {
+			if _, err := DecodeStrictForRange([]byte(`[[1,2,3],[4,5,6],[7,8,9]]`), rangeSpec); err != nil {
+				t.Fatalf("open or named range %q: %v", rangeSpec, err)
+			}
+		})
+	}
+}
+
 func TestDecodeUsesNativeJSONNumbers(t *testing.T) {
 	values, err := Decode([]byte(`[[2]]`))
 	if err != nil {

@@ -28,8 +28,9 @@ type McpCmd struct {
 type mcpToolRisk string
 
 const (
-	mcpRiskRead  mcpToolRisk = "read"
-	mcpRiskWrite mcpToolRisk = "write"
+	mcpRiskRead        mcpToolRisk = "read"
+	mcpRiskWrite       mcpToolRisk = "write"
+	mcpRiskDestructive mcpToolRisk = "destructive"
 )
 
 type mcpToolSpec struct {
@@ -119,7 +120,7 @@ func newMCPTool(tool mcpToolSpec) mcp.Tool {
 	opts := append([]mcp.ToolOption{
 		mcp.WithDescription(tool.Description),
 		mcp.WithReadOnlyHintAnnotation(tool.Risk == mcpRiskRead),
-		mcp.WithDestructiveHintAnnotation(tool.Risk == mcpRiskWrite),
+		mcp.WithDestructiveHintAnnotation(tool.Risk == mcpRiskDestructive),
 		mcp.WithIdempotentHintAnnotation(tool.Risk == mcpRiskRead),
 		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithSchemaAdditionalProperties(false),

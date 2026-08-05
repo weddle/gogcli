@@ -292,3 +292,136 @@ func TestSafetyProfileFiltersSchema(t *testing.T) {
 		t.Fatalf("expected send to be hidden from filtered schema, got: %q", out)
 	}
 }
+
+func TestBakedCalendarSafetyProfileOutcomes(t *testing.T) {
+	profiles := []struct {
+		name            string
+		file            string
+		blockedCommands [][]string
+		allowedCommands [][]string
+		unmanaged       [][]string
+	}{
+		{
+			name: "agent-safe",
+			file: "agent-safe.yaml",
+			blockedCommands: [][]string{
+				{"calendar", "subscribe", "raw@example.com"},
+				{"calendar", "out-of-office", "--from", "2026-08-04T09:00:00Z", "--to", "2026-08-04T10:00:00Z"},
+				{"calendar", "working-location", "--from", "2026-08-04", "--to", "2026-08-05", "--type", "home"},
+			},
+			allowedCommands: [][]string{
+				{"calendar", "focus-time"},
+				{"calendar", "create-calendar"},
+			},
+			unmanaged: [][]string{
+				{"calendar", "unsubscribe", "raw@example.com"},
+			},
+		},
+		{
+			name: "readonly",
+			file: "readonly.yaml",
+			blockedCommands: [][]string{
+				{"calendar", "create", "--summary", "Plan", "--from", "2026-08-04T09:00:00Z", "--to", "2026-08-04T10:00:00Z", "primary"},
+				{"calendar", "respond", "--status", "accepted", "primary", "event-1"},
+				{"calendar", "move", "primary", "event-1", "destination@example.com"},
+				{"calendar", "create-calendar", "Team"},
+				{"calendar", "subscribe", "raw@example.com"},
+				{"calendar", "focus-time", "--from", "2026-08-04T09:00:00Z", "--to", "2026-08-04T10:00:00Z"},
+				{"calendar", "out-of-office", "--from", "2026-08-04T09:00:00Z", "--to", "2026-08-04T10:00:00Z"},
+				{"calendar", "working-location", "--from", "2026-08-04", "--to", "2026-08-05", "--type", "home"},
+			},
+			unmanaged: [][]string{
+				{"calendar", "unsubscribe", "raw@example.com"},
+			},
+		},
+	}
+
+	for _, profile := range profiles {
+		profile := profile
+		t.Run(profile.name, func(t *testing.T) {
+			setTestConfigHome(t)
+			raw, err := os.ReadFile(filepath.Join("..", "..", "safety-profiles", profile.file))
+			if err != nil {
+				t.Fatalf("read %s: %v", profile.file, err)
+			}
+			withBakedSafetyProfile(t, string(raw))
+
+			runHelp := func(args ...string) (string, string, error) {
+				var stdout, stderr string
+				var runErr error
+				stdout = captureStdout(t, func() {
+					stderr = captureStderr(t, func() {
+						runErr = Execute(append(append([]string{}, args...), "--help"))
+					})
+				})
+				return stdout, stderr, runErr
+			}
+
+			runCommand := func(args ...string) (string, string, error) {
+				var stdout, stderr string
+				var runErr error
+				stdout = captureStdout(t, func() {
+					stderr = captureStderr(t, func() {
+						runErr = Execute(args)
+					})
+				})
+				return stdout, stderr, runErr
+			}
+
+			for _, args := range profile.blockedCommands {
+				args := args
+				t.Run("blocked/"+strings.Join(args, "-"), func(t *testing.T) {
+					stdout, stderr, runErr := runCommand(args...)
+					if runErr == nil {
+						t.Fatalf("Execute(%v) unexpectedly succeeded; stdout=%q stderr=%q", args, stdout, stderr)
+					}
+					if got := ExitCode(runErr); got != 2 {
+						t.Fatalf("Execute(%v) exit code = %d, want 2; err=%v stderr=%q", args, got, runErr, stderr)
+					}
+					if !strings.Contains(runErr.Error(), "baked safety profile") || !strings.Contains(stderr, "baked safety profile") {
+						t.Fatalf("Execute(%v) error=%v stderr=%q, want baked-profile refusal", args, runErr, stderr)
+					}
+					if stdout != "" {
+						t.Fatalf("blocked Execute(%v) leaked help to stdout: %q", args, stdout)
+					}
+				})
+			}
+
+			for _, args := range profile.allowedCommands {
+				args := args
+				t.Run("allowed/"+strings.Join(args, "-"), func(t *testing.T) {
+					stdout, stderr, runErr := runHelp(args...)
+					if runErr != nil {
+						t.Fatalf("Execute(%v) = %v; stdout=%q stderr=%q", args, runErr, stdout, stderr)
+					}
+					if !strings.Contains(stdout, "Usage:") {
+						t.Fatalf("allowed Execute(%v) did not print help: %q", args, stdout)
+					}
+					if strings.Contains(stdout, "blocked by baked safety profile") || strings.Contains(stderr, "baked safety profile") {
+						t.Fatalf("allowed Execute(%v) reported baked-profile refusal: stdout=%q stderr=%q", args, stdout, stderr)
+					}
+				})
+			}
+
+			for _, args := range profile.unmanaged {
+				args := args
+				t.Run("unmanaged/"+strings.Join(args, "-"), func(t *testing.T) {
+					stdout, stderr, runErr := runCommand(args...)
+					if runErr == nil {
+						t.Fatalf("Execute(%v) unexpectedly allowed unmanaged command; stdout=%q stderr=%q", args, stdout, stderr)
+					}
+					if got := ExitCode(runErr); got != 2 {
+						t.Fatalf("Execute(%v) exit code = %d, want 2; err=%v stderr=%q", args, got, runErr, stderr)
+					}
+					if !strings.Contains(runErr.Error(), "not included in baked safety profile") ||
+						!strings.Contains(stderr, "not included in baked safety profile") {
+						t.Fatalf("Execute(%v) error=%v stderr=%q, want unmanaged fail-closed refusal", args, runErr, stderr)
+					}
+					if stdout != "" {
+						t.Fatalf("unmanaged Execute(%v) leaked help to stdout: %q", args, stdout)
+					}
+				})
+			}
+		})
+	}
+}
