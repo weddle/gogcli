@@ -71,6 +71,7 @@ type tabExportParams struct {
 	Format    string
 	TabQuery  string
 	Overwrite bool
+	MaxBytes  int64
 }
 
 // sanitizeFilenameComponent replaces characters unsafe for filenames with
@@ -153,6 +154,9 @@ func runDocsTabExport(ctx context.Context, flags *RootFlags, p tabExportParams) 
 	if p.DocID == "" {
 		return usage("empty docId")
 	}
+	if p.MaxBytes < 0 {
+		return usage("--max-bytes must be >= 0")
+	}
 
 	format := p.Format
 	if format == "" || format == formatAuto {
@@ -181,13 +185,17 @@ func runDocsTabExport(ctx context.Context, flags *RootFlags, p tabExportParams) 
 		return usage("can't combine --json with --out -")
 	}
 
-	if dryErr := dryRunExit(ctx, flags, "docs.tab-export", map[string]any{
+	tabExportRequest := map[string]any{
 		"docID":     p.DocID,
 		"tab":       p.TabQuery,
 		"format":    format,
 		"out":       outPath,
 		"overwrite": p.Overwrite,
-	}); dryErr != nil {
+	}
+	if p.MaxBytes > 0 {
+		tabExportRequest["max_bytes"] = p.MaxBytes
+	}
+	if dryErr := dryRunExit(ctx, flags, "docs.tab-export", tabExportRequest); dryErr != nil {
 		return dryErr
 	}
 
@@ -231,30 +239,17 @@ func runDocsTabExport(ctx context.Context, flags *RootFlags, p tabExportParams) 
 		return checkErr
 	}
 
-	if isStdoutPath(outPath) {
-		_, copyErr := io.Copy(stdoutWriter(ctx), resp.Body)
-		return copyErr
-	}
-
-	f, outPath, writeErr := openUserOutputFile(outPath, outputFileOptions{
-		Overwrite: p.Overwrite,
-		FileMode:  0o600,
-		DirMode:   0o700,
-	})
+	downloadedPath, n, writeErr := writeDriveDownloadResponse(ctx, resp.Body, outPath, p.Overwrite, p.MaxBytes)
 	if writeErr != nil {
 		return writeErr
 	}
-	defer f.Close()
-
-	n, err := io.Copy(f, resp.Body)
-	if err != nil {
-		return err
-	}
-
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"path": outPath, "size": n})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"path": downloadedPath, "size": n})
 	}
-	u.Out().Linef("path\t%s", outPath)
+	if isStdoutPath(downloadedPath) {
+		return nil
+	}
+	u.Out().Linef("path\t%s", downloadedPath)
 	u.Out().Linef("size\t%s", formatDriveSize(n))
 	return nil
 }

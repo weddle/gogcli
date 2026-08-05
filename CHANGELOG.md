@@ -5,19 +5,34 @@
 - Dependencies: update the Go developer tools, pnpm, and email-tracking worker transitive pins to their latest releases.
 - Docs: rewrite the README as a concise front door and move task examples into a dedicated guide.
 - MCP: reject explicitly empty `docs_write` tabs before execution and preserve exact argv for append, replace, markdown, tab, and leading-dash text inputs.
+- MCP: expose the existing Sheets `dimension` enum (`ROWS`/`COLUMNS`) on `sheets_read_range`, preserving the default and exact `--`-delimited range argv.
 - MCP: add default read-only `drive_list_folder` with bounded folder paging and explicit shared-drive inclusion over `drive ls`.
-- MCP: add bounded typed Gmail, Calendar, Drive, Docs, Sheets, and Slides tools with closed schemas, deterministic service ordering, inline-only drafts/comments, and explicit safety-policy exclusions.
-- MCP: document the Wave A registry snapshot (45 typed tools: 18 Read, 27
+- MCP: add optional typed `drive_search.drive_id` shared-drive scoping via the existing `--drive` flag; paging and `all_drives` toggles remain outside the MCP surface.
+- MCP: add typed, bounded `calendar_events` paging with opaque `page_token`, explicit `all_pages`, mutual-exclusion validation, and preserved API page envelopes.
+- MCP: add `gmail_update_draft` as an ordinary Write tool over the existing full-message-rebuild CLI path: omitted `to` is preserved, omitted `cc`/`bcc` are cleared unless reply-all derives them, attachments and reply lineage are preserved, and send, file, attachment-change, path, or generic argv inputs remain excluded.
+- MCP: add `calendar_update_event` as an ordinary Write tool with explicit partial-update presence semantics, serialized clears for supported empty summary/description/location/attendees/rrule/reminders/event-color fields, recurring-event scope, and `send_updates=none` by default; integrations, attachments, and specialized Calendar event types remain excluded.
+- Drive: add a shared `--max-bytes` raw-content cap to download/export, with inclusive boundary detection and fail-closed temporary output cleanup.
+- MCP: add fail-closed destructive authorization infrastructure. Future
+  Destructive tools require ordinary write authorization plus an explicit
+  `destructive` or exact-tool selector; existing broad Read/Write selectors do
+  not acquire them, and no destructive domain tool is registered yet.
+- MCP: document the Wave C registry snapshot (48 typed tools: 19 Read, 29
   ordinary Write, and no Destructive tools), future-expanding broad selectors
-  for ordinary tools, and the deferred G05 (Gmail draft update), C07 (Calendar
-  event update), R02, and B02–B04 scope. Gmail send and Calendar deletion
-  remain separate excluded surfaces.
+  for ordinary tools, and the bounded B04 Drive download Read surface. Gmail
+  send and Calendar deletion remain separate excluded surfaces.
 - Sheets/MCP: document concrete-A1 row and column overflow rejection for
   literal `values_json` while preserving strict JSON, numeric precision, and
   named/open-ended range compatibility.
 - MCP: record E03's explicit exclusion of Drive permanent delete, upload,
-  download, share/unshare, host paths, stdin, and `@file` transport, while
-  retaining B01's approved bounded inline-base64 decision as specification-only.
+  share/unshare, host paths, stdin, and `@file` transport, while retaining
+  B01's approved bounded inline-base64 transport decision.
+- MCP: implement the reusable bounded inline binary encoder selected by B01,
+  with padded standard base64, direct structured content, MIME/name/size
+  metadata, a 65,536-byte inclusive raw cap, and atomic output-cap errors.
+- MCP: register the bounded `drive_download` Read tool over the B02/B03
+  transport. It accepts only explicit `file_id` plus supported `format`,
+  uses fixed server-side raw capture, and never returns a host path or partial
+  base64.
 - MCP: document tool-specific bounds/defaults and structured partial-failure
   hazards, including non-atomic Docs, Sheets, Slides, and Gmail operations.
 - MCP: document C10's out-of-band cleanup: create the secondary calendar,

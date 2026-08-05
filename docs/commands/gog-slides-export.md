@@ -32,6 +32,7 @@ gog slides (slide) export (download,dl) <presentationId> [flags]
 | `-h`<br>`--help` | `kong.helpFlag` |  | Show context-sensitive help. |
 | `--home` | `string` |  | Override gogcli config/data/state/cache root (equivalent to GOG_HOME) |
 | `-j`<br>`--json`<br>`--machine` | `bool` | false | Output JSON to stdout (best for scripting) |
+| `--max-bytes` | `int64` | 0 | Maximum raw bytes to download (0 = unlimited) |
 | `--no-input`<br>`--non-interactive`<br>`--noninteractive` | `bool` |  | Never prompt; fail instead (useful for CI) |
 | `--out`<br>`--output` | `string` |  | Output file path (default: gogcli config dir) |
 | `--overwrite` | `bool` |  | Overwrite an existing output file |

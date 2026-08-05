@@ -29,6 +29,7 @@ func mcpAllTools() []mcpToolSpec {
 		mcpCalendarConflictsTool(),
 		mcpDriveSearchTool(),
 		mcpDriveGetTool(),
+		mcpDriveDownloadTool(),
 		mcpDriveListFolderTool(),
 		mcpDrivePermissionsTool(),
 		mcpDocsGetTool(),
@@ -36,6 +37,7 @@ func mcpAllTools() []mcpToolSpec {
 
 		// Write tools follow reads and stay grouped by service.
 		mcpGmailCreateDraftTool(),
+		mcpGmailUpdateDraftTool(),
 		mcpGmailModifyMessageLabelsTool(),
 		mcpGmailModifyThreadLabelsTool(),
 		mcpGmailArchiveMessagesTool(),
@@ -43,6 +45,7 @@ func mcpAllTools() []mcpToolSpec {
 		mcpGmailMarkMessagesReadTool(),
 		mcpGmailMarkMessagesUnreadTool(),
 		mcpCalendarCreateEventTool(),
+		mcpCalendarUpdateTool(),
 		mcpCalendarRespondTool(),
 		mcpCalendarMoveTool(),
 		mcpCalendarCreateCalendarTool(),
@@ -147,12 +150,13 @@ func mcpDriveSearchTool() mcpToolSpec {
 		Name:        "drive_search",
 		Service:     "drive",
 		Risk:        mcpRiskRead,
-		Description: "Search Google Drive files using text search or Drive query language.",
+		Description: "Search Google Drive files using text search or Drive query language, optionally scoped to a shared drive.",
 		Options: []mcp.ToolOption{
 			mcp.WithString("query", mcp.Description("Search text or Drive query"), mcp.Required()),
 			mcp.WithInteger("max", mcp.Description("Maximum results"), mcp.DefaultNumber(20), mcp.Min(1), mcp.Max(100)),
 			mcp.WithBoolean("raw_query", mcp.Description("Treat query as Drive query language"), mcp.DefaultBool(false)),
 			mcp.WithString("parent", mcp.Description("Optional parent folder/shared drive ID")),
+			mcp.WithString("drive_id", mcp.Description("Optional shared-drive/team-drive ID to scope the search")),
 		},
 		BuildArgs: func(req mcp.CallToolRequest) ([]string, error) {
 			query, err := requireMCPString(req, "query")
@@ -169,6 +173,9 @@ func mcpDriveSearchTool() mcpToolSpec {
 					return nil, fmt.Errorf("--parent cannot be combined with --raw-query; include the \"'<parentId>' in parents\" clause in your raw query instead")
 				}
 				args = append(args, "--parent", parent)
+			}
+			if driveID := strings.TrimSpace(req.GetString("drive_id", "")); driveID != "" {
+				args = append(args, "--drive", driveID)
 			}
 			return append(args, "--", query), nil
 		},
@@ -274,6 +281,7 @@ func mcpSheetsReadRangeTool() mcpToolSpec {
 		Options: []mcp.ToolOption{
 			mcp.WithString("spreadsheet_id", mcp.Description("Google Sheets spreadsheet ID"), mcp.Required()),
 			mcp.WithString("range", mcp.Description("A1 notation or named range"), mcp.Required()),
+			mcp.WithString("dimension", mcp.Description("Major dimension"), mcp.Enum("ROWS", "COLUMNS")),
 			mcp.WithString("render", mcp.Description("Value render option"), mcp.Enum("FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA")),
 		},
 		BuildArgs: func(req mcp.CallToolRequest) ([]string, error) {
@@ -286,6 +294,9 @@ func mcpSheetsReadRangeTool() mcpToolSpec {
 				return nil, err
 			}
 			args := []string{"sheets", "get"}
+			if dimension := strings.TrimSpace(req.GetString("dimension", "")); dimension != "" {
+				args = append(args, "--dimension", dimension)
+			}
 			if render := strings.TrimSpace(req.GetString("render", "")); render != "" {
 				args = append(args, "--render", render)
 			}
@@ -299,7 +310,7 @@ func mcpCalendarEventsTool() mcpToolSpec {
 		Name:        "calendar_events",
 		Service:     "calendar",
 		Risk:        mcpRiskRead,
-		Description: "List Google Calendar events from primary or selected calendars.",
+		Description: "List Google Calendar events from primary or selected calendars with bounded paging.",
 		Options: []mcp.ToolOption{
 			mcp.WithString("calendar_id", mcp.Description("Calendar ID or selector; default primary")),
 			mcp.WithString("from", mcp.Description("Start time: RFC3339, date, or relative value")),
@@ -307,10 +318,21 @@ func mcpCalendarEventsTool() mcpToolSpec {
 			mcp.WithBoolean("today", mcp.Description("Today only"), mcp.DefaultBool(false)),
 			mcp.WithBoolean("tomorrow", mcp.Description("Tomorrow only"), mcp.DefaultBool(false)),
 			mcp.WithInteger("days", mcp.Description("Next N days"), mcp.DefaultNumber(0), mcp.Min(0), mcp.Max(31)),
-			mcp.WithInteger("max", mcp.Description("Maximum results"), mcp.DefaultNumber(10), mcp.Min(1), mcp.Max(250)),
+			mcp.WithInteger("max", mcp.Description("Maximum results per page"), mcp.DefaultNumber(10), mcp.Min(1), mcp.Max(250)),
+			mcp.WithString("page_token", mcp.Description("Opaque page token from a prior response")),
+			mcp.WithBoolean("all_pages", mcp.Description("Fetch all pages within the CLI and MCP output bounds"), mcp.DefaultBool(false)),
 			mcp.WithString("query", mcp.Description("Free text search")),
 		},
 		BuildArgs: func(req mcp.CallToolRequest) ([]string, error) {
+			pageToken, err := mcpDefaultNonEmptyString(req, "page_token", "")
+			if err != nil {
+				return nil, err
+			}
+			allPages := req.GetBool("all_pages", false)
+			if pageToken != "" && allPages {
+				return nil, fmt.Errorf("page_token cannot be combined with all_pages")
+			}
+
 			args := []string{"calendar", "events"}
 			calendarID := strings.TrimSpace(req.GetString("calendar_id", ""))
 			for _, pair := range [][2]string{{"from", "--from"}, {"to", "--to"}, {"query", "--query"}} {
@@ -328,6 +350,12 @@ func mcpCalendarEventsTool() mcpToolSpec {
 				args = append(args, "--days", strconv.Itoa(clampMCPInt(days, 1, 31)))
 			}
 			args = append(args, "--max", strconv.Itoa(clampMCPInt(req.GetInt("max", 10), 1, 250)))
+			if pageToken != "" {
+				args = append(args, "--page="+pageToken)
+			}
+			if allPages {
+				args = append(args, "--all-pages")
+			}
 			if calendarID != "" {
 				args = append(args, "--", calendarID)
 			}

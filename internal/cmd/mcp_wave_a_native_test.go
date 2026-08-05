@@ -762,7 +762,7 @@ func TestMCPE03NativeExclusionsIncludeExplicitReadSelector(t *testing.T) {
 	}
 	for _, selector := range selectors {
 		tools := mcpEnabledTools(selector)
-		for _, forbidden := range []string{"drive_upload", "drive_download", "drive_delete", "drive_trash", "drive_share", "drive_unshare"} {
+		for _, forbidden := range []string{"drive_upload", "drive_delete", "drive_trash", "drive_share", "drive_unshare"} {
 			if hasMCPTool(tools, forbidden) {
 				t.Fatalf("selector %#v exposed forbidden tool %q", selector.AllowTool, forbidden)
 			}
@@ -814,7 +814,7 @@ func TestMCPE03NativeExclusionsIncludeExplicitReadSelector(t *testing.T) {
 			}
 			joined := strings.Join(args, "\x00")
 			for _, forbidden := range []string{
-				"drive\x00upload", "drive\x00download", "drive\x00delete", "--permanent", "--file", "@file", "stdin",
+				"drive\x00upload", "drive\x00delete", "--permanent", "--file", "@file", "stdin",
 			} {
 				if strings.Contains(joined, forbidden) {
 					t.Fatalf("argv contains excluded operation/input %q: %#v", forbidden, args)

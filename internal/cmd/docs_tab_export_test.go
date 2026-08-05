@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -476,6 +477,32 @@ func TestDocsExportCmd_TabRouting(t *testing.T) {
 	}
 }
 
+func TestExecute_DocsExport_TabMaxBytes(t *testing.T) {
+	const limit = DriveDownloadMaxBytes
+	payload := bytes.Repeat([]byte("x"), int(limit))
+	ctx, _ := newTabExportTestContext(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write(payload)
+	}), false)
+	outPath := filepath.Join(t.TempDir(), "docs-tab.pdf")
+	err := runKong(t, &DocsExportCmd{}, []string{
+		"doc1",
+		"--tab", "Second Tab",
+		"--out", outPath,
+		"--max-bytes", strconv.FormatInt(limit, 10),
+	}, ctx, &RootFlags{Account: "test@example.com"})
+	if err != nil {
+		t.Fatalf("runKong: %v", err)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("output length = %d, want %d", len(got), len(payload))
+	}
+}
+
 func TestDocsExportCmd_TabEmptyDocID(t *testing.T) {
 	ctx := newDocsCmdContext(t)
 	cmd := &DocsExportCmd{DocID: "", Tab: "some-tab"}
@@ -557,6 +584,46 @@ func TestDriveDownloadCmd_TabRouting(t *testing.T) {
 
 			if err := cmd.Run(ctx, &RootFlags{Account: "test@example.com"}); err != nil {
 				t.Fatalf("DriveDownloadCmd.Run: %v", err)
+			}
+		})
+	}
+}
+
+func TestExecute_DriveDownload_TabMaxBytesBoundaries(t *testing.T) {
+	const limit = DriveDownloadMaxBytes
+	for _, size := range []int64{limit - 1, limit, limit + 1} {
+		size := size
+		t.Run("size_"+strconv.FormatInt(size, 10), func(t *testing.T) {
+			payload := bytes.Repeat([]byte("x"), int(size))
+			ctx, _ := newTabExportTestContext(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/pdf")
+				_, _ = w.Write(payload)
+			}), false)
+			outPath := filepath.Join(t.TempDir(), "tab.pdf")
+			err := runKong(t, &DriveDownloadCmd{}, []string{
+				"doc1",
+				"--tab", "First Tab",
+				"--out", outPath,
+				"--max-bytes", strconv.FormatInt(limit, 10),
+			}, ctx, &RootFlags{Account: "test@example.com"})
+			if size > limit {
+				if !errors.Is(err, ErrDriveDownloadSizeLimit) {
+					t.Fatalf("error = %v, want size-limit error", err)
+				}
+				if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+					t.Fatalf("over-limit destination exists, stat=%v", statErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("runKong: %v", err)
+			}
+			got, readErr := os.ReadFile(outPath)
+			if readErr != nil {
+				t.Fatalf("read output: %v", readErr)
+			}
+			if !bytes.Equal(got, payload) {
+				t.Fatalf("output length = %d, want %d", len(got), len(payload))
 			}
 		})
 	}

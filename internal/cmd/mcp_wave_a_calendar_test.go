@@ -439,7 +439,7 @@ func TestMCPWaveACalendarSchemasRejectInvalidCallsBeforeHandler(t *testing.T) {
 		arguments map[string]any
 		wantText  string
 	}{
-		{name: "events unknown page field", tool: "calendar_events", arguments: map[string]any{"page_token": "next"}, wantText: "page_token"},
+		{name: "events unknown CLI alias field", tool: "calendar_events", arguments: map[string]any{"page": "next"}, wantText: "page"},
 		{name: "events wrong max type", tool: "calendar_events", arguments: map[string]any{"max": "10"}, wantText: "max"},
 		{name: "list wrong max type", tool: "calendar_list_calendars", arguments: map[string]any{"max": "100"}, wantText: "max"},
 		{name: "list unknown page field", tool: "calendar_list_calendars", arguments: map[string]any{"page": "next"}, wantText: "page"},
@@ -678,16 +678,16 @@ func TestMCPWaveACalendarSchemasAreClosedAndExcludeDeferredSurfaces(t *testing.T
 			}
 		})
 	}
-	for _, forbidden := range []string{"calendar_update_event", "calendar_delete_event", "calendar_delete_calendar", "calendar_integrations", "calendar_acl"} {
+	for _, forbidden := range []string{"calendar_delete_event", "calendar_delete_calendar", "calendar_integrations", "calendar_acl"} {
 		if hasMCPTool(mcpAllTools(), forbidden) {
 			t.Fatalf("deferred Calendar tool %q exposed", forbidden)
 		}
 	}
 
 	eventsProperties := newMCPTool(findMCPTool(t, "calendar_events")).InputSchema.Properties
-	for _, field := range []string{"calendars", "page_token", "all_pages", "event_types", "event_type", "weekday", "private_prop_filter", "shared_prop_filter"} {
+	for _, field := range []string{"calendars", "cal", "all", "event_types", "event_type", "sort", "order", "fields", "weekday", "private_prop_filter", "shared_prop_filter"} {
 		if _, exposed := eventsProperties[field]; exposed {
-			t.Fatalf("M08 events exposes deferred or unscoped field %q", field)
+			t.Fatalf("calendar events exposes deferred or unscoped field %q", field)
 		}
 	}
 }
@@ -737,6 +737,7 @@ func TestMCPWaveACalendarSelectorAndReadOnlyPolicy(t *testing.T) {
 	}
 	writeTools := []string{
 		"calendar_create_event",
+		"calendar_update_event",
 		"calendar_respond_to_event",
 		"calendar_move_event",
 		"calendar_create_calendar",

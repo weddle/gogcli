@@ -165,6 +165,7 @@ type DocsExportCmd struct {
 	Format    string         `name:"format" help:"Export format: pdf|docx|txt|md|html" default:"pdf"`
 	Tab       string         `name:"tab" help:"(experimental) Export a specific tab by title or ID (see 'gog docs list-tabs')"`
 	Overwrite bool           `name:"overwrite" help:"Overwrite an existing output file"`
+	MaxBytes  int64          `name:"max-bytes" help:"Maximum raw bytes to download (0 = unlimited)" default:"0"`
 }
 
 func (c *DocsExportCmd) Run(ctx context.Context, flags *RootFlags) error {
@@ -175,6 +176,7 @@ func (c *DocsExportCmd) Run(ctx context.Context, flags *RootFlags) error {
 			Format:    c.Format,
 			TabQuery:  tab,
 			Overwrite: c.Overwrite,
+			MaxBytes:  c.MaxBytes,
 		})
 	}
 	return exportViaDrive(ctx, flags, exportViaDriveOptions{
@@ -182,7 +184,7 @@ func (c *DocsExportCmd) Run(ctx context.Context, flags *RootFlags) error {
 		ExpectedMime:  "application/vnd.google-apps.document",
 		KindLabel:     "Google Doc",
 		DefaultFormat: "pdf",
-	}, c.DocID, c.Output.Path, c.Format, c.Overwrite)
+	}, c.DocID, c.Output.Path, c.Format, c.Overwrite, c.MaxBytes)
 }
 
 type DocsInfoCmd struct {

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -398,5 +400,91 @@ func TestExecute_SlidesExport_DefaultFormat_PPTX(t *testing.T) {
 	}
 	if gotExportMime != "application/vnd.openxmlformats-officedocument.presentationml.presentation" {
 		t.Fatalf("unexpected export mime type: %q", gotExportMime)
+	}
+}
+
+func TestExecute_SharedExport_MaxBytesBoundaries(t *testing.T) {
+	const limit = DriveDownloadMaxBytes
+	tests := []struct {
+		name string
+		args []string
+		mime string
+		ext  string
+	}{
+		{
+			name: "docs",
+			args: []string{"docs", "export", "id1"},
+			mime: "application/vnd.google-apps.document",
+			ext:  "pdf",
+		},
+		{
+			name: "sheets",
+			args: []string{"sheets", "export", "id1"},
+			mime: "application/vnd.google-apps.spreadsheet",
+			ext:  "xlsx",
+		},
+		{
+			name: "slides",
+			args: []string{"slides", "export", "id1"},
+			mime: "application/vnd.google-apps.presentation",
+			ext:  "pptx",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			for _, size := range []int64{limit - 1, limit, limit + 1} {
+				size := size
+				t.Run("size_"+strconv.FormatInt(size, 10), func(t *testing.T) {
+					payload := bytes.Repeat([]byte("x"), int(size))
+					svc, cleanup := newDriveMetadataTestService(t, tt.mime)
+					t.Cleanup(cleanup)
+					export := func(context.Context, *drive.Service, string, string) (*http.Response, error) {
+						return &http.Response{
+							Status:     "200 OK",
+							StatusCode: http.StatusOK,
+							Body:       io.NopCloser(bytes.NewReader(payload)),
+						}, nil
+					}
+					outBase := filepath.Join(t.TempDir(), "out")
+					args := append([]string{"--json", "--account", "a@b.com"}, tt.args...)
+					args = append(args,
+						"--out", outBase,
+						"--max-bytes", strconv.FormatInt(limit, 10),
+					)
+					result := executeWithDriveTestOperations(t, args, svc, nil, export)
+					wantPath := outBase + "." + tt.ext
+					if size > limit {
+						if !errors.Is(result.err, ErrDriveDownloadSizeLimit) {
+							t.Fatalf("error = %v, want size-limit error", result.err)
+						}
+						if _, statErr := os.Stat(wantPath); !os.IsNotExist(statErr) {
+							t.Fatalf("over-limit destination exists, stat=%v", statErr)
+						}
+						return
+					}
+					if result.err != nil {
+						t.Fatalf("Execute: %v", result.err)
+					}
+					var parsed struct {
+						Path string `json:"path"`
+						Size int64  `json:"size"`
+					}
+					if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+						t.Fatalf("json parse: %v\nout=%q", err, result.stdout)
+					}
+					if parsed.Path != wantPath || parsed.Size != size {
+						t.Fatalf("result = %#v, want path=%q size=%d", parsed, wantPath, size)
+					}
+					got, err := os.ReadFile(wantPath)
+					if err != nil {
+						t.Fatalf("read output: %v", err)
+					}
+					if !bytes.Equal(got, payload) {
+						t.Fatalf("output length = %d, want %d", len(got), len(payload))
+					}
+				})
+			}
+		})
 	}
 }

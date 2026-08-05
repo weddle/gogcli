@@ -22,7 +22,7 @@ type exportViaDriveOptions struct {
 
 const defaultExportFormat = "pdf"
 
-func exportViaDrive(ctx context.Context, flags *RootFlags, opts exportViaDriveOptions, id string, outPathFlag string, format string, overwrite bool) error {
+func exportViaDrive(ctx context.Context, flags *RootFlags, opts exportViaDriveOptions, id string, outPathFlag string, format string, overwrite bool, maxBytes int64) error {
 	u := ui.FromContext(ctx)
 
 	argName := strings.TrimSpace(opts.ArgName)
@@ -33,7 +33,9 @@ func exportViaDrive(ctx context.Context, flags *RootFlags, opts exportViaDriveOp
 	if id == "" {
 		return usage(fmt.Sprintf("empty %s", argName))
 	}
-
+	if maxBytes < 0 {
+		return usage("--max-bytes must be >= 0")
+	}
 	// Avoid touching auth/keyring and avoid writing files in dry-run mode.
 	outPathFlag = strings.TrimSpace(outPathFlag)
 	if outPathFlag != "" {
@@ -64,7 +66,7 @@ func exportViaDrive(ctx context.Context, flags *RootFlags, opts exportViaDriveOp
 		}
 		defaultDownloadsDir = layout.DriveDownloadsDir()
 	}
-	if err := dryRunExit(ctx, flags, op, map[string]any{
+	request := map[string]any{
 		"id":                    id,
 		"out":                   outPathFlag,
 		"default_downloads_dir": defaultDownloadsDir,
@@ -72,7 +74,11 @@ func exportViaDrive(ctx context.Context, flags *RootFlags, opts exportViaDriveOp
 		"overwrite":             overwrite,
 		"expected_mime":         strings.TrimSpace(opts.ExpectedMime),
 		"kind":                  strings.TrimSpace(opts.KindLabel),
-	}); err != nil {
+	}
+	if maxBytes > 0 {
+		request["max_bytes"] = maxBytes
+	}
+	if err := dryRunExit(ctx, flags, op, request); err != nil {
 		return err
 	}
 
@@ -108,7 +114,7 @@ func exportViaDrive(ctx context.Context, flags *RootFlags, opts exportViaDriveOp
 		return usage("can't combine --json with --out -")
 	}
 
-	downloadedPath, size, err := downloadDriveFile(ctx, svc, meta, destPath, format, overwrite)
+	downloadedPath, size, err := downloadDriveFileWithMaxBytes(ctx, svc, meta, destPath, format, overwrite, maxBytes)
 	if err != nil {
 		return err
 	}

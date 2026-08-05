@@ -48,6 +48,111 @@ func TestListCalendarEvents_JSON(t *testing.T) {
 	}
 }
 
+func TestListCalendarEvents_PageTokenJSON(t *testing.T) {
+	svc, closeServer := newCalendarServiceForTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/calendars/cal1/events") || r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.URL.Query().Get("maxResults"); got != "2" {
+			t.Fatalf("maxResults = %q, want 2", got)
+		}
+		if got := r.URL.Query().Get("pageToken"); got != "cursor-2" {
+			t.Fatalf("pageToken = %q, want cursor-2", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"items": []map[string]any{{
+				"id": "e2", "summary": "Second",
+				"start": map[string]any{"dateTime": "2025-01-01T11:00:00Z"},
+				"end":   map[string]any{"dateTime": "2025-01-01T12:00:00Z"},
+			}},
+			"nextPageToken": "cursor-3",
+		})
+	}))
+	defer closeServer()
+
+	var output bytes.Buffer
+	ctx := newCmdRuntimeJSONOutputContext(t, &output, io.Discard)
+	if err := listCalendarEvents(ctx, svc, "cal1", "2025-01-01T00:00:00Z", "2025-01-02T00:00:00Z", 2, "cursor-2", false, false, "", "", "", "", nil, false, false, "", "", nil); err != nil {
+		t.Fatalf("listCalendarEvents: %v", err)
+	}
+
+	var parsed struct {
+		Events        []map[string]any `json:"events"`
+		NextPageToken string           `json:"nextPageToken"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &parsed); err != nil {
+		t.Fatalf("json parse: %v", err)
+	}
+	if len(parsed.Events) != 1 || parsed.Events[0]["id"] != "e2" || parsed.NextPageToken != "cursor-3" {
+		t.Fatalf("unexpected page payload: %#v", parsed)
+	}
+}
+
+func TestListCalendarEvents_AllPagesJSONIsEnvelopeBounded(t *testing.T) {
+	var pageTokens []string
+	svc, closeServer := newCalendarServiceForTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/calendars/cal1/events") || r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.URL.Query().Get("maxResults"); got != "1" {
+			t.Fatalf("maxResults = %q, want 1", got)
+		}
+		pageToken := r.URL.Query().Get("pageToken")
+		pageTokens = append(pageTokens, pageToken)
+		var payload map[string]any
+		switch pageToken {
+		case "":
+			payload = map[string]any{
+				"items": []map[string]any{{
+					"id": "e1", "summary": "First",
+					"start": map[string]any{"dateTime": "2025-01-01T10:00:00Z"},
+					"end":   map[string]any{"dateTime": "2025-01-01T11:00:00Z"},
+				}},
+				"nextPageToken": "cursor-2",
+			}
+		case "cursor-2":
+			payload = map[string]any{
+				"items": []map[string]any{{
+					"id": "e2", "summary": "Second",
+					"start": map[string]any{"dateTime": "2025-01-01T11:00:00Z"},
+					"end":   map[string]any{"dateTime": "2025-01-01T12:00:00Z"},
+				}},
+			}
+		default:
+			t.Fatalf("unexpected pageToken = %q", pageToken)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer closeServer()
+
+	var output bytes.Buffer
+	ctx := newCmdRuntimeJSONOutputContext(t, &output, io.Discard)
+	if err := listCalendarEvents(ctx, svc, "cal1", "2025-01-01T00:00:00Z", "2025-01-02T00:00:00Z", 1, "", true, false, "", "", "", "", nil, false, false, "", "", nil); err != nil {
+		t.Fatalf("listCalendarEvents: %v", err)
+	}
+
+	var parsed struct {
+		Events        []map[string]any `json:"events"`
+		NextPageToken string           `json:"nextPageToken"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &parsed); err != nil {
+		t.Fatalf("json parse: %v", err)
+	}
+	if len(parsed.Events) != 2 || parsed.Events[0]["id"] != "e1" || parsed.Events[1]["id"] != "e2" {
+		t.Fatalf("unexpected all-pages events: %#v", parsed.Events)
+	}
+	if parsed.NextPageToken != "" {
+		t.Fatalf("all-pages nextPageToken = %q, want empty", parsed.NextPageToken)
+	}
+	if !slices.Equal(pageTokens, []string{"", "cursor-2"}) {
+		t.Fatalf("page tokens = %#v, want [empty cursor-2]", pageTokens)
+	}
+}
+
 // cal1EventsHandler serves /calendars/cal1 with the given timezone and
 // /calendars/cal1/events with the given items.
 func cal1EventsHandler(timezone string, items []map[string]any) http.Handler {

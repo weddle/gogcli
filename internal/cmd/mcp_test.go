@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,81 @@ func TestMCPRegistryHasNoDestructiveTools(t *testing.T) {
 	}
 }
 
+func TestMCPDestructiveSelectionRequiresWriteAndExplicitSelector(t *testing.T) {
+	tool := mcpToolSpec{
+		Name:    "calendar_delete_event",
+		Service: "calendar",
+		Risk:    mcpRiskDestructive,
+	}
+	tests := []struct {
+		name        string
+		allowWrite  bool
+		selectors   []string
+		wantVisible bool
+	}{
+		{name: "default", selectors: nil},
+		{name: "write authorization only", allowWrite: true},
+		{name: "empty selector", allowWrite: true, selectors: []string{}},
+		{name: "read selector", allowWrite: true, selectors: []string{"read"}},
+		{name: "write selector", allowWrite: true, selectors: []string{"write"}},
+		{name: "service selector", allowWrite: true, selectors: []string{"calendar"}},
+		{name: "service wildcard", allowWrite: true, selectors: []string{"calendar.*"}},
+		{name: "star selector", allowWrite: true, selectors: []string{"*"}},
+		{name: "all selector", allowWrite: true, selectors: []string{"all"}},
+		{name: "destructive wildcard", allowWrite: true, selectors: []string{"destructive.*"}},
+		{name: "unknown selector", allowWrite: true, selectors: []string{"future_tool"}},
+		{name: "destructive risk selector", allowWrite: true, selectors: []string{"destructive"}, wantVisible: true},
+		{name: "exact tool selector", allowWrite: true, selectors: []string{"calendar_delete_event"}, wantVisible: true},
+		{name: "exact without write authorization", selectors: []string{"calendar_delete_event"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mcpToolVisible(tool, tt.allowWrite, tt.selectors); got != tt.wantVisible {
+				t.Fatalf("mcpToolVisible(%t, %#v) = %t, want %t", tt.allowWrite, tt.selectors, got, tt.wantVisible)
+			}
+		})
+	}
+}
+
+func TestMCPPolicyAcceptsExplicitDestructiveSelector(t *testing.T) {
+	policy, err := normalizeMCPPolicy(config.MCPPolicy{
+		AllowTools: []string{"destructive"},
+		AllowWrite: true,
+	})
+	if err != nil {
+		t.Fatalf("normalizeMCPPolicy: %v", err)
+	}
+	if len(policy.AllowTools) != 1 || policy.AllowTools[0] != "destructive" {
+		t.Fatalf("normalized destructive policy = %#v", policy)
+	}
+	if !mcpSelectorMatchesAnyTool("destructive") {
+		t.Fatal("destructive selector should be recognized before a domain tool is registered")
+	}
+
+	accountPolicy, err := selectMCPPolicy(config.MCPConfig{
+		MCPPolicy: config.MCPPolicy{AllowTools: []string{"read"}},
+		Accounts: map[string]config.MCPPolicy{
+			"destructive@example.com": policy,
+		},
+	}, "destructive@example.com")
+	if err != nil {
+		t.Fatalf("selectMCPPolicy: %v", err)
+	}
+	tool := mcpToolSpec{Name: "calendar_delete_event", Service: "calendar", Risk: mcpRiskDestructive}
+	if !mcpToolVisible(tool, accountPolicy.AllowWrite, accountPolicy.AllowTools) {
+		t.Fatal("explicit per-account destructive policy should select a destructive tool")
+	}
+	if mcpToolVisible(tool, false, accountPolicy.AllowTools) {
+		t.Fatal("readonly policy must suppress destructive tools")
+	}
+
+	for _, selectors := range [][]string{{}, {"unknown_selector"}, {"destructive.*"}} {
+		if _, err := normalizeMCPPolicy(config.MCPPolicy{AllowTools: selectors, AllowWrite: true}); err == nil {
+			t.Fatalf("expected fail-closed policy for selectors %#v", selectors)
+		}
+	}
+}
+
 func TestMCPEnabledToolsDefaultReadOnly(t *testing.T) {
 	tools := mcpEnabledTools(McpCmd{})
 	if len(tools) == 0 {
@@ -72,6 +148,24 @@ func TestMCPEnabledToolsDefaultReadOnly(t *testing.T) {
 	}
 	if !hasMCPTool(tools, "gmail_search") {
 		t.Fatal("gmail_search should be enabled by default")
+	}
+}
+
+func TestMCPRuntimeReadonlyWithoutPolicySuppressesWrites(t *testing.T) {
+	tools := mcpEnabledToolsNoPolicy(McpCmd{
+		AllowWrite: true,
+		AllowTool:  []string{"all"},
+	}, &RootFlags{ReadOnly: true})
+	if len(tools) == 0 {
+		t.Fatal("expected read tools")
+	}
+	for _, tool := range tools {
+		if tool.Risk != mcpRiskRead {
+			t.Fatalf("readonly runtime exposed %s tool %q", tool.Risk, tool.Name)
+		}
+	}
+	if hasMCPTool(tools, "docs_write") {
+		t.Fatal("readonly runtime exposed docs_write without persistent policy")
 	}
 }
 
@@ -1378,6 +1472,21 @@ func TestMCPCalendarEventsBuildArgs(t *testing.T) {
 			want:      []string{"calendar", "events", "--max", "42"},
 		},
 		{
+			name:      "page token is trimmed and follows max",
+			arguments: map[string]any{"max": 42, "page_token": " page-2 "},
+			want:      []string{"calendar", "events", "--max", "42", "--page=page-2"},
+		},
+		{
+			name:      "leading dash page token stays opaque",
+			arguments: map[string]any{"page_token": "-opaque"},
+			want:      []string{"calendar", "events", "--max", "10", "--page=-opaque"},
+		},
+		{
+			name:      "all pages uses existing CLI flag",
+			arguments: map[string]any{"all_pages": true, "calendar_id": "family@example.com"},
+			want:      []string{"calendar", "events", "--max", "10", "--all-pages", "--", "family@example.com"},
+		},
+		{
 			name:      "query",
 			arguments: map[string]any{"query": "team planning"},
 			want:      []string{"calendar", "events", "--query", "team planning", "--max", "10"},
@@ -1398,6 +1507,36 @@ func TestMCPCalendarEventsBuildArgs(t *testing.T) {
 				if arg == "--json" {
 					t.Fatalf("adapter supplied runner-owned JSON flag: %#v", args)
 				}
+			}
+		})
+	}
+}
+
+func TestMCPCalendarEventsBuildArgsRejectsPagingConflictsAndEmptyTokens(t *testing.T) {
+	tool := findMCPTool(t, "calendar_events")
+	tests := []struct {
+		name      string
+		arguments map[string]any
+		wantText  string
+	}{
+		{
+			name:      "page token and all pages conflict",
+			arguments: map[string]any{"page_token": "next", "all_pages": true},
+			wantText:  "cannot be combined",
+		},
+		{
+			name:      "explicit empty page token",
+			arguments: map[string]any{"page_token": "   "},
+			wantText:  "must not be empty",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tool.BuildArgs(mcp.CallToolRequest{Params: mcp.CallToolParams{
+				Arguments: tt.arguments,
+			}})
+			if err == nil || !strings.Contains(err.Error(), tt.wantText) {
+				t.Fatalf("BuildArgs error = %v, want text %q", err, tt.wantText)
 			}
 		})
 	}
@@ -1437,12 +1576,12 @@ func TestMCPCalendarEventsSchemaIsClosedAndTyped(t *testing.T) {
 		wantText  string
 	}{
 		{
-			name: "unknown pagination field",
+			name: "unknown field",
 			arguments: map[string]any{
-				"page_token": "next",
+				"page": "next",
 			},
 			wantError: true,
-			wantText:  "page_token",
+			wantText:  "page",
 		},
 		{
 			name: "unknown multi-calendar field",
@@ -1453,12 +1592,84 @@ func TestMCPCalendarEventsSchemaIsClosedAndTyped(t *testing.T) {
 			wantText:  "calendars",
 		},
 		{
+			name: "unknown all-calendars selector",
+			arguments: map[string]any{
+				"all": true,
+			},
+			wantError: true,
+			wantText:  "all",
+		},
+		{
+			name: "unknown repeatable calendar selector",
+			arguments: map[string]any{
+				"cal": []any{"primary"},
+			},
+			wantError: true,
+			wantText:  "cal",
+		},
+		{
+			name: "unknown event-type filter",
+			arguments: map[string]any{
+				"event_types": []any{"default"},
+			},
+			wantError: true,
+			wantText:  "event_types",
+		},
+		{
+			name: "unknown singular event-type filter",
+			arguments: map[string]any{
+				"event_type": "default",
+			},
+			wantError: true,
+			wantText:  "event_type",
+		},
+		{
+			name: "unknown sorting control",
+			arguments: map[string]any{
+				"sort": "start",
+			},
+			wantError: true,
+			wantText:  "sort",
+		},
+		{
+			name: "unknown order control",
+			arguments: map[string]any{
+				"order": "asc",
+			},
+			wantError: true,
+			wantText:  "order",
+		},
+		{
+			name: "unknown field-mask control",
+			arguments: map[string]any{
+				"fields": "items(id)",
+			},
+			wantError: true,
+			wantText:  "fields",
+		},
+		{
 			name: "wrong type",
 			arguments: map[string]any{
 				"max": "25",
 			},
 			wantError: true,
 			wantText:  "max",
+		},
+		{
+			name: "wrong page token type",
+			arguments: map[string]any{
+				"page_token": 2,
+			},
+			wantError: true,
+			wantText:  "page_token",
+		},
+		{
+			name: "wrong all pages type",
+			arguments: map[string]any{
+				"all_pages": "true",
+			},
+			wantError: true,
+			wantText:  "all_pages",
 		},
 		{
 			name: "all supported fields",
@@ -1470,7 +1681,8 @@ func TestMCPCalendarEventsSchemaIsClosedAndTyped(t *testing.T) {
 				"tomorrow":    true,
 				"days":        3,
 				"max":         25,
-				"query":       "team planning",
+				"page_token":  "next",
+				"all_pages":   false,
 			},
 			wantText: "ok",
 		},
@@ -1554,9 +1766,57 @@ func TestMCPCalendarEventsRunnerSuppliesJSON(t *testing.T) {
 	}
 }
 
+func TestMCPCalendarEventsRunnerBoundsLargeOutput(t *testing.T) {
+	const maxOutputBytes = 128
+	tool := findMCPTool(t, "calendar_events")
+	args, err := tool.BuildArgs(mcp.CallToolRequest{Params: mcp.CallToolParams{
+		Arguments: map[string]any{"all_pages": true},
+	}})
+	if err != nil {
+		t.Fatalf("BuildArgs: %v", err)
+	}
+	if !slices.Contains(args, "--all-pages") {
+		t.Fatalf("all_pages args = %#v, want --all-pages", args)
+	}
+
+	t.Setenv("GOG_MCP_M08_RUNNER_HELPER", "1")
+	t.Setenv("GOG_MCP_M12_RUNNER_MODE", "large")
+	result := mcpRunGogTool(t.Context(), mcpRunOptions{
+		self:           os.Args[0],
+		tool:           tool,
+		commandArgs:    []string{"-test.run=TestMCPM08RunnerHelper$"},
+		timeout:        5 * time.Second,
+		maxOutputBytes: maxOutputBytes,
+	})
+	if result.IsError {
+		t.Fatalf("runner result is error: %#v", result.Content)
+	}
+	got, ok := result.StructuredContent.(mcpCommandResult)
+	if !ok {
+		t.Fatalf("structured result type = %T, want mcpCommandResult", result.StructuredContent)
+	}
+	if got.ExitCode != 0 || got.Stderr != "" {
+		t.Fatalf("bounded runner result = %#v", got)
+	}
+	stdout, ok := got.Stdout.(string)
+	if !ok {
+		t.Fatalf("bounded stdout type = %T, want string", got.Stdout)
+	}
+	if !strings.Contains(stdout, "... [output truncated]") {
+		t.Fatalf("bounded stdout = %q, want truncation marker", stdout)
+	}
+	if len(stdout) > maxOutputBytes+len("\n... [output truncated]") {
+		t.Fatalf("bounded stdout length = %d, exceeds cap %d plus marker", len(stdout), maxOutputBytes)
+	}
+}
+
 func TestMCPM08RunnerHelper(t *testing.T) {
 	if os.Getenv("GOG_MCP_M08_RUNNER_HELPER") != "1" {
 		return
+	}
+	if os.Getenv("GOG_MCP_M12_RUNNER_MODE") == "large" {
+		_, _ = io.WriteString(os.Stdout, `{"events":[`+strings.Repeat(`{"id":"large"},`, 256)+`{"id":"large"}]}`)
+		os.Exit(0)
 	}
 	_, _ = io.WriteString(os.Stdout, `{"events":[]}`)
 	os.Exit(0)
@@ -1614,6 +1874,25 @@ func TestMCPSheetsReadRangeBuildArgs(t *testing.T) {
 				"range":          "Sheet1!A1:B2",
 			},
 			want: []string{"sheets", "get", "--", "sheet1", "Sheet1!A1:B2"},
+		},
+		{
+			name: "rows dimension",
+			arguments: map[string]any{
+				"spreadsheet_id": "sheet1",
+				"range":          "Sheet1!A1:B2",
+				"dimension":      "ROWS",
+			},
+			want: []string{"sheets", "get", "--dimension", "ROWS", "--", "sheet1", "Sheet1!A1:B2"},
+		},
+		{
+			name: "columns dimension with formula render",
+			arguments: map[string]any{
+				"spreadsheet_id": "sheet1",
+				"range":          "Sheet1!A1:B2",
+				"dimension":      "COLUMNS",
+				"render":         "FORMULA",
+			},
+			want: []string{"sheets", "get", "--dimension", "COLUMNS", "--render", "FORMULA", "--", "sheet1", "Sheet1!A1:B2"},
 		},
 		{
 			name: "formatted render",
@@ -1794,20 +2073,51 @@ func TestMCPServerValidatesSheetsReadRangeInputSchema(t *testing.T) {
 			wantText:  "render",
 		},
 		{
-			name: "unknown dimension field",
+			name: "invalid dimension enum",
 			arguments: map[string]any{
 				"spreadsheet_id": "sheet1",
 				"range":          "Sheet1!A1",
-				"dimension":      "ROWS",
+				"dimension":      "INVALID",
 			},
 			wantError: true,
 			wantText:  "dimension",
+		},
+		{
+			name: "wrong dimension type",
+			arguments: map[string]any{
+				"spreadsheet_id": "sheet1",
+				"range":          "Sheet1!A1",
+				"dimension":      123,
+			},
+			wantError: true,
+			wantText:  "dimension",
+		},
+		{
+			name: "empty dimension",
+			arguments: map[string]any{
+				"spreadsheet_id": "sheet1",
+				"range":          "Sheet1!A1",
+				"dimension":      "",
+			},
+			wantError: true,
+			wantText:  "dimension",
+		},
+		{
+			name: "unknown field",
+			arguments: map[string]any{
+				"spreadsheet_id": "sheet1",
+				"range":          "Sheet1!A1",
+				"unexpected":     true,
+			},
+			wantError: true,
+			wantText:  "unexpected",
 		},
 		{
 			name: "valid",
 			arguments: map[string]any{
 				"spreadsheet_id": "sheet1",
 				"range":          "Sheet1!A1",
+				"dimension":      "COLUMNS",
 				"render":         "FORMULA",
 			},
 			wantText: "ok",
@@ -1839,6 +2149,72 @@ func TestMCPServerValidatesSheetsReadRangeInputSchema(t *testing.T) {
 	if handlerCalls != 1 {
 		t.Fatalf("handler calls = %d, want 1", handlerCalls)
 	}
+}
+
+func TestMCPSheetsReadRangeRunnerReturnsStructuredResult(t *testing.T) {
+	tool := findMCPTool(t, "sheets_read_range")
+	args, err := tool.BuildArgs(mcp.CallToolRequest{Params: mcp.CallToolParams{
+		Arguments: map[string]any{
+			"spreadsheet_id": "sheet1",
+			"range":          "Sheet1!A1:B2",
+			"dimension":      "COLUMNS",
+		},
+	}})
+	if err != nil {
+		t.Fatalf("BuildArgs: %v", err)
+	}
+	wantArgs := []string{"sheets", "get", "--dimension", "COLUMNS", "--", "sheet1", "Sheet1!A1:B2"}
+	if strings.Join(args, "\x00") != strings.Join(wantArgs, "\x00") {
+		t.Fatalf("args = %#v, want %#v", args, wantArgs)
+	}
+
+	t.Setenv("GOG_MCP_M13_RUNNER_HELPER", "1")
+	result := mcpRunGogTool(t.Context(), mcpRunOptions{
+		self:           os.Args[0],
+		tool:           tool,
+		commandArgs:    []string{"-test.run=TestMCPM13RunnerHelper$"},
+		timeout:        5 * time.Second,
+		maxOutputBytes: 4096,
+	})
+	if result.IsError {
+		t.Fatalf("runner result is error: %#v", result.Content)
+	}
+	got, ok := result.StructuredContent.(mcpCommandResult)
+	if !ok {
+		t.Fatalf("structured result type = %T, want mcpCommandResult", result.StructuredContent)
+	}
+	if got.Tool != "sheets_read_range" || got.Service != "sheets" || got.Risk != string(mcpRiskRead) {
+		t.Fatalf("structured metadata = %#v", got)
+	}
+	if got.ExitCode != 0 {
+		t.Fatalf("runner exit code = %d, stderr = %q", got.ExitCode, got.Stderr)
+	}
+	stdout, ok := got.Stdout.(map[string]any)
+	if !ok {
+		t.Fatalf("runner stdout type = %T, want JSON object", got.Stdout)
+	}
+	if stdout["range"] != "Sheet1!A1:B2" {
+		t.Fatalf("runner range = %#v", stdout["range"])
+	}
+	values, ok := stdout["values"].([]any)
+	if !ok || len(values) != 1 {
+		t.Fatalf("runner values = %#v, want one row", stdout["values"])
+	}
+	row, ok := values[0].([]any)
+	if !ok || len(row) != 2 || row[0] != "status" || row[1] != "ready" {
+		t.Fatalf("runner first row = %#v", values[0])
+	}
+	if got.Stderr != "" {
+		t.Fatalf("runner stderr = %q, want empty", got.Stderr)
+	}
+}
+
+func TestMCPM13RunnerHelper(t *testing.T) {
+	if os.Getenv("GOG_MCP_M13_RUNNER_HELPER") != "1" {
+		return
+	}
+	_, _ = io.WriteString(os.Stdout, `{"range":"Sheet1!A1:B2","values":[["status","ready"]]}`)
+	os.Exit(0)
 }
 
 func TestMCPWaveAAdaptersBuildExactArgsAndPolicy(t *testing.T) {
@@ -1940,7 +2316,7 @@ func TestMCPWaveACanonicalSchemaFields(t *testing.T) {
 		present []string
 		absent  []string
 	}{
-		{"calendar_list_calendars", []string{"page_token", "all_pages"}, []string{"page", "all"}},
+		{"calendar_events", []string{"page_token", "all_pages"}, []string{"page", "all"}},
 		{"calendar_move_event", []string{"source_calendar_id", "event_id", "destination_calendar_id"}, nil},
 		{"drive_move", []string{"file_id", "destination_parent"}, []string{"parent"}},
 		{"drive_copy", []string{"source_id", "new_name", "parent"}, []string{"file_id", "name"}},
@@ -2064,7 +2440,7 @@ func TestMCPE03DriveExclusionsAcrossSelectorsSchemasAndArgv(t *testing.T) {
 		{AllowWrite: true, AllowTool: []string{"destructive"}},
 		{AllowWrite: true, AllowTool: []string{"all"}},
 	}
-	forbiddenTools := []string{"drive_upload", "drive_download", "drive_delete", "drive_trash", "drive_share", "drive_unshare"}
+	forbiddenTools := []string{"drive_upload", "drive_delete", "drive_trash", "drive_share", "drive_unshare"}
 	for _, cmd := range selectors {
 		tools := mcpEnabledTools(cmd)
 		for _, forbidden := range forbiddenTools {
@@ -2110,7 +2486,7 @@ func TestMCPE03DriveExclusionsAcrossSelectorsSchemasAndArgv(t *testing.T) {
 			t.Fatalf("%s BuildArgs: %v", call.tool, err)
 		}
 		joined := strings.Join(args, "\x00")
-		for _, forbidden := range []string{"drive\x00upload", "drive\x00download", "drive\x00delete", "--permanent", "@file", "local_path"} {
+		for _, forbidden := range []string{"drive\x00upload", "drive\x00delete", "--permanent", "@file", "local_path"} {
 			if strings.Contains(joined, forbidden) {
 				t.Fatalf("%s argv contains forbidden operation/input %q: %#v", call.tool, forbidden, args)
 			}

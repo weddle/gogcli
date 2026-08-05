@@ -1,13 +1,16 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -193,5 +196,128 @@ func TestExecute_DriveDownload_FormatRejected_NonGoogle(t *testing.T) {
 	}
 	if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
 		t.Fatalf("expected no file written, stat=%v", statErr)
+	}
+}
+
+func TestExecute_DriveDownload_MaxBytesBoundaries(t *testing.T) {
+	const limit = DriveDownloadMaxBytes
+	for _, size := range []int64{limit - 1, limit, limit + 1} {
+		size := size
+		t.Run("size_"+strconv.FormatInt(size, 10), func(t *testing.T) {
+			payload := bytes.Repeat([]byte("x"), int(size))
+			svc, cleanup := newDriveMetadataTestService(t, "text/plain")
+			t.Cleanup(cleanup)
+			download := func(context.Context, *drive.Service, string) (*http.Response, error) {
+				return &http.Response{
+					Status:     "200 OK",
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(payload)),
+				}, nil
+			}
+			dest := filepath.Join(t.TempDir(), "out.bin")
+			result := executeWithDriveTestOperations(t, []string{
+				"--json", "--account", "a@b.com",
+				"drive", "download", "id1",
+				"--out", dest,
+				"--max-bytes", strconv.FormatInt(limit, 10),
+			}, svc, download, nil)
+			if size > limit {
+				if !errors.Is(result.err, ErrDriveDownloadSizeLimit) {
+					t.Fatalf("error = %v, want size-limit error", result.err)
+				}
+				if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+					t.Fatalf("over-limit destination exists, stat=%v", statErr)
+				}
+				return
+			}
+			if result.err != nil {
+				t.Fatalf("Execute: %v", result.err)
+			}
+			var parsed struct {
+				Path string `json:"path"`
+				Size int64  `json:"size"`
+			}
+			if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+				t.Fatalf("json parse: %v\nout=%q", err, result.stdout)
+			}
+			if parsed.Path != dest || parsed.Size != size {
+				t.Fatalf("result = %#v, want path=%q size=%d", parsed, dest, size)
+			}
+			got, err := os.ReadFile(dest)
+			if err != nil {
+				t.Fatalf("read output: %v", err)
+			}
+			if !bytes.Equal(got, payload) {
+				t.Fatalf("output length = %d, want %d", len(got), len(payload))
+			}
+		})
+	}
+}
+
+func TestExecute_DriveDownload_MaxBytesNoOverwriteCollision(t *testing.T) {
+	const limit = DriveDownloadMaxBytes
+	payload := bytes.Repeat([]byte("x"), int(limit))
+	svc, cleanup := newDriveMetadataTestService(t, "text/plain")
+	t.Cleanup(cleanup)
+	download := func(context.Context, *drive.Service, string) (*http.Response, error) {
+		return &http.Response{
+			Status:     "200 OK",
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(payload)),
+		}, nil
+	}
+	dest := filepath.Join(t.TempDir(), "out.bin")
+	if err := os.WriteFile(dest, []byte("original"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	result := executeWithDriveTestOperations(t, []string{
+		"--account", "a@b.com",
+		"drive", "download", "id1",
+		"--out", dest,
+		"--max-bytes", strconv.FormatInt(limit, 10),
+	}, svc, download, nil)
+	if !errors.Is(result.err, os.ErrExist) {
+		t.Fatalf("error = %v, want existing-file error", result.err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read existing destination: %v", err)
+	}
+	if string(got) != "original" {
+		t.Fatalf("existing destination changed: %q", got)
+	}
+}
+
+func TestExecute_TopLevelDownloadAlias_MaxBytes(t *testing.T) {
+	const limit = DriveDownloadMaxBytes
+	payload := bytes.Repeat([]byte("x"), int(limit-1))
+	svc, cleanup := newDriveMetadataTestService(t, "text/plain")
+	t.Cleanup(cleanup)
+	download := func(context.Context, *drive.Service, string) (*http.Response, error) {
+		return &http.Response{
+			Status:     "200 OK",
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(payload)),
+		}, nil
+	}
+	dest := filepath.Join(t.TempDir(), "alias.bin")
+	result := executeWithDriveTestOperations(t, []string{
+		"--json", "--account", "a@b.com",
+		"download", "id1",
+		"--out", dest,
+		"--max-bytes", strconv.FormatInt(limit, 10),
+	}, svc, download, nil)
+	if result.err != nil {
+		t.Fatalf("Execute top-level alias: %v", result.err)
+	}
+	var parsed struct {
+		Path string `json:"path"`
+		Size int64  `json:"size"`
+	}
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+		t.Fatalf("json parse: %v\nout=%q", err, result.stdout)
+	}
+	if parsed.Path != dest || parsed.Size != int64(len(payload)) {
+		t.Fatalf("result = %#v, want path=%q size=%d", parsed, dest, len(payload))
 	}
 }

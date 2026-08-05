@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -213,5 +215,212 @@ func TestDownloadDriveFile_CreatesMissingParentDirs(t *testing.T) {
 	}
 	if string(data) != "x" {
 		t.Fatalf("data=%q, want %q", string(data), "x")
+	}
+}
+
+func TestDownloadDriveFile_MaxBytesBoundaries(t *testing.T) {
+	t.Parallel()
+
+	const limit = DriveDownloadMaxBytes
+	for _, size := range []int64{limit - 1, limit, limit + 1} {
+		size := size
+		t.Run(fmt.Sprintf("size_%d", size), func(t *testing.T) {
+			t.Parallel()
+
+			payload := bytes.Repeat([]byte("x"), int(size))
+			download := func(context.Context, *drive.Service, string) (*http.Response, error) {
+				return &http.Response{
+					Status:     "200 OK",
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(payload)),
+				}, nil
+			}
+			dest := filepath.Join(t.TempDir(), "nested", "file.bin")
+			ctx := withDriveTestOperations(context.Background(), &drive.Service{}, download, nil)
+			outPath, gotSize, err := downloadDriveFileWithMaxBytes(ctx, &drive.Service{}, &drive.File{Id: "id1", MimeType: "application/pdf"}, dest, "", false, limit)
+			if size > limit {
+				if !errors.Is(err, ErrDriveDownloadSizeLimit) {
+					t.Fatalf("error = %v, want size-limit error", err)
+				}
+				if outPath != "" || gotSize != 0 {
+					t.Fatalf("over-limit result = (%q, %d), want empty path and zero size", outPath, gotSize)
+				}
+				if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+					t.Fatalf("over-limit destination exists, stat error = %v", statErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("bounded download: %v", err)
+			}
+			if outPath != dest || gotSize != size {
+				t.Fatalf("result = (%q, %d), want (%q, %d)", outPath, gotSize, dest, size)
+			}
+			got, readErr := os.ReadFile(dest)
+			if readErr != nil {
+				t.Fatalf("read bounded output: %v", readErr)
+			}
+			if !bytes.Equal(got, payload) {
+				t.Fatalf("output length = %d, want %d", len(got), len(payload))
+			}
+		})
+	}
+}
+
+func TestDownloadDriveFile_MaxBytesLeavesExistingDestination(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), int(DriveDownloadMaxBytes)+1)
+	download := func(context.Context, *drive.Service, string) (*http.Response, error) {
+		return &http.Response{
+			Status:     "200 OK",
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(payload)),
+		}, nil
+	}
+	dest := filepath.Join(t.TempDir(), "file.bin")
+	if err := os.WriteFile(dest, []byte("original"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	ctx := withDriveTestOperations(context.Background(), &drive.Service{}, download, nil)
+	_, _, err := downloadDriveFileWithMaxBytes(ctx, &drive.Service{}, &drive.File{Id: "id1", MimeType: "application/pdf"}, dest, "", true, DriveDownloadMaxBytes)
+	if !errors.Is(err, ErrDriveDownloadSizeLimit) {
+		t.Fatalf("error = %v, want size-limit error", err)
+	}
+	got, readErr := os.ReadFile(dest)
+	if readErr != nil {
+		t.Fatalf("read existing destination: %v", readErr)
+	}
+	if string(got) != "original" {
+		t.Fatalf("existing destination changed: %q", got)
+	}
+}
+
+func TestDownloadDriveFile_MaxBytesRequiresOverwrite(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), int(DriveDownloadMaxBytes-1))
+	download := func(context.Context, *drive.Service, string) (*http.Response, error) {
+		return &http.Response{
+			Status:     "200 OK",
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(payload)),
+		}, nil
+	}
+	dest := filepath.Join(t.TempDir(), "file.bin")
+	if err := os.WriteFile(dest, []byte("original"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	ctx := withDriveTestOperations(context.Background(), &drive.Service{}, download, nil)
+
+	_, _, err := downloadDriveFileWithMaxBytes(ctx, &drive.Service{}, &drive.File{Id: "id1", MimeType: "application/pdf"}, dest, "", false, DriveDownloadMaxBytes)
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("error = %v, want existing-file error", err)
+	}
+	got, readErr := os.ReadFile(dest)
+	if readErr != nil {
+		t.Fatalf("read existing destination: %v", readErr)
+	}
+	if string(got) != "original" {
+		t.Fatalf("existing destination changed: %q", got)
+	}
+}
+
+func TestDownloadDriveFile_MaxBytesOverwritesExistingDestination(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), int(DriveDownloadMaxBytes))
+	download := func(context.Context, *drive.Service, string) (*http.Response, error) {
+		return &http.Response{
+			Status:     "200 OK",
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(payload)),
+		}, nil
+	}
+	dest := filepath.Join(t.TempDir(), "file.bin")
+	if err := os.WriteFile(dest, []byte("original"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	ctx := withDriveTestOperations(context.Background(), &drive.Service{}, download, nil)
+
+	outPath, size, err := downloadDriveFileWithMaxBytes(ctx, &drive.Service{}, &drive.File{Id: "id1", MimeType: "application/pdf"}, dest, "", true, DriveDownloadMaxBytes)
+	if err != nil {
+		t.Fatalf("bounded overwrite: %v", err)
+	}
+	if outPath != dest || size != DriveDownloadMaxBytes {
+		t.Fatalf("result = (%q, %d), want (%q, %d)", outPath, size, dest, DriveDownloadMaxBytes)
+	}
+	got, readErr := os.ReadFile(dest)
+	if readErr != nil {
+		t.Fatalf("read overwritten destination: %v", readErr)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("overwritten destination length = %d, want %d", len(got), len(payload))
+	}
+}
+
+func TestDownloadDriveFile_MaxBytesPreservesPrivateModes(t *testing.T) {
+	download := func(context.Context, *drive.Service, string) (*http.Response, error) {
+		return &http.Response{
+			Status:     "200 OK",
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("bounded")),
+		}, nil
+	}
+	dir := filepath.Join(t.TempDir(), "private")
+	dest := filepath.Join(dir, "file.bin")
+	ctx := withDriveTestOperations(context.Background(), &drive.Service{}, download, nil)
+	if _, _, err := downloadDriveFileWithMaxBytes(ctx, &drive.Service{}, &drive.File{Id: "id1", MimeType: "application/pdf"}, dest, "", false, DriveDownloadMaxBytes); err != nil {
+		t.Fatalf("bounded download: %v", err)
+	}
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat output directory: %v", err)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0o700 {
+		t.Fatalf("directory mode = %o, want 700", got)
+	}
+	fileInfo, err := os.Stat(dest)
+	if err != nil {
+		t.Fatalf("stat output file: %v", err)
+	}
+	if got := fileInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %o, want 600", got)
+	}
+}
+
+func TestDownloadDriveFile_MaxBytesCancellationLeavesNoOutput(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	download := func(context.Context, *drive.Service, string) (*http.Response, error) {
+		return &http.Response{
+			Status:     "200 OK",
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("cancelled")),
+		}, nil
+	}
+	dest := filepath.Join(t.TempDir(), "file.bin")
+	ctx = withDriveTestOperations(ctx, &drive.Service{}, download, nil)
+	_, _, err := downloadDriveFileWithMaxBytes(ctx, &drive.Service{}, &drive.File{Id: "id1", MimeType: "application/pdf"}, dest, "", false, DriveDownloadMaxBytes)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("cancelled destination exists, stat error = %v", statErr)
+	}
+}
+
+func TestDownloadDriveFile_MaxBytesStdoutHasNoPartialOutput(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), int(DriveDownloadMaxBytes)+1)
+	download := func(context.Context, *drive.Service, string) (*http.Response, error) {
+		return &http.Response{
+			Status:     "200 OK",
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(payload)),
+		}, nil
+	}
+	var stdout bytes.Buffer
+	ctx := newCmdRuntimeOutputContext(t, &stdout, io.Discard)
+	ctx = withDriveTestOperations(ctx, &drive.Service{}, download, nil)
+	_, _, err := downloadDriveFileWithMaxBytes(ctx, &drive.Service{}, &drive.File{Id: "id1", MimeType: "application/pdf"}, stdoutPath, "", false, DriveDownloadMaxBytes)
+	if !errors.Is(err, ErrDriveDownloadSizeLimit) {
+		t.Fatalf("error = %v, want size-limit error", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout length = %d, want no partial output", stdout.Len())
 	}
 }

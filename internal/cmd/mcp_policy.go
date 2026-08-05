@@ -18,7 +18,7 @@ func mcpEnabledToolsForRun(ctx context.Context, cmd McpCmd, flags *RootFlags) ([
 		return nil, "", err
 	}
 	if cfg.MCP == nil {
-		return mcpEnabledTools(cmd), "", nil
+		return mcpEnabledToolsNoPolicy(cmd, flags), "", nil
 	}
 
 	account := ""
@@ -34,6 +34,13 @@ func mcpEnabledToolsForRun(ctx context.Context, cmd McpCmd, flags *RootFlags) ([
 	}
 	tools, err := mcpEnabledToolsWithPolicy(cmd, flags, policy)
 	return tools, account, err
+}
+
+func mcpEnabledToolsNoPolicy(cmd McpCmd, flags *RootFlags) []mcpToolSpec {
+	if flags != nil && flags.ReadOnly {
+		cmd.AllowWrite = false
+	}
+	return mcpEnabledTools(cmd)
 }
 
 func resolveMCPPolicyAccount(flags *RootFlags) (string, error) {
@@ -106,10 +113,7 @@ func mcpEnabledToolsWithPolicy(cmd McpCmd, flags *RootFlags, policy config.MCPPo
 	runtimeAllow := splitCommaValues(cmd.AllowTool)
 	tools := make([]mcpToolSpec, 0, len(mcpAllTools()))
 	for _, tool := range mcpAllTools() {
-		if tool.Risk == mcpRiskWrite && !allowWrite {
-			continue
-		}
-		if !mcpToolAllowed(tool, policy.AllowTools) {
+		if !mcpToolVisible(tool, allowWrite, policy.AllowTools) {
 			continue
 		}
 		if len(runtimeAllow) > 0 && !mcpToolAllowed(tool, runtimeAllow) {
@@ -121,6 +125,11 @@ func mcpEnabledToolsWithPolicy(cmd McpCmd, flags *RootFlags, policy config.MCPPo
 }
 
 func mcpSelectorMatchesAnyTool(selector string) bool {
+	if selector == string(mcpRiskDestructive) {
+		// Keep the explicit class selector valid even before a destructive
+		// domain tool is registered. It is an opt-in capability ceiling.
+		return true
+	}
 	for _, tool := range mcpAllTools() {
 		if mcpToolAllowed(tool, []string{selector}) {
 			return true

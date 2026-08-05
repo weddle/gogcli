@@ -1086,7 +1086,7 @@ func TestMCPWaveAGmailArchiveThreadPartialFailureUsesRealCLIResult(t *testing.T)
 
 func TestMCPWaveAGmailWritePolicySelectors(t *testing.T) {
 	writeTools := []string{
-		"gmail_create_draft", "gmail_modify_message_labels", "gmail_modify_thread_labels",
+		"gmail_create_draft", "gmail_update_draft", "gmail_modify_message_labels", "gmail_modify_thread_labels",
 		"gmail_archive_messages", "gmail_archive_threads", "gmail_mark_messages_read", "gmail_mark_messages_unread",
 	}
 	for _, name := range writeTools {

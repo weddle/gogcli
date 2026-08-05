@@ -40,51 +40,116 @@ permissioned Google Workspace tool surface. It intentionally does not expose a
 generic shell/argv bridge. Each MCP tool has a fixed schema and maps to a
 specific `gog` operation.
 
-MCP defaults are read-only. Write tools are hidden unless the server is started
-with `--allow-write`, and `--allow-tool` can further narrow the registered tool
-set by tool name or service prefix. Parent root context such as `--account`,
-`--home`, output mode, `--no-input`, untrusted wrapping, and command safety
-flags is preserved for subprocess calls.
+MCP defaults are read-only. Write and Destructive tools require ordinary write
+authorization: runtime `--allow-write` or a persistent policy with
+`allow_write: true`. `--allow-tool` can further narrow the registered tool set
+by tool name or service prefix. Destructive tools have an additional selection
+gate: `--allow-tool` must contain the literal `destructive` selector or the
+exact destructive tool name. Parent root context such as `--account`, `--home`,
+output mode, `--no-input`, untrusted wrapping, and command safety flags is
+preserved for subprocess calls.
 
 Selector matching is evaluated against the registry at server startup. Exact
 tool names are the stable least-privilege choice; service selectors
-(`gmail`, `gmail.*`, and their peers), risk selectors (`read` and `write`), and
-`*`/`all` are intentionally future-expanding. After an upgrade they include
-newly registered ordinary tools in the selected class, subject to the same
-read-only and `--allow-write` checks. Existing ordinary `write`, service
-wildcard, `*`, and `all` policies do not acquire deferred destructive tools:
-R02 must add explicit destructive-tool selection and authorization.
+(`gmail`, `gmail.*`, and their peers), the `read`/`write` risk selectors, and
+`*`/`all` are intentionally future-expanding for ordinary Read/Write tools.
+After an upgrade they include newly registered ordinary tools in the selected
+class, subject to the same read-only and `--allow-write` checks. The literal
+`destructive` selector is the only risk-wide destructive opt-in; existing
+ordinary `write`, service, service-wildcard, `*`, and `all` policies do not
+acquire deferred destructive tools.
 
-The initial typed surface is grouped by service. Gmail reads are
+### Policy migration compatibility matrix
+
+This is the binary compatibility contract for the legacy runtime and persistent
+MCP policies. `Read`, `Write`, and `Destructive` are `tools/list` visibility
+results for representative tools; the current registry has no destructive
+domain tool, so destructive rows are fixture behavior only.
+
+| Context | Selector | Gate/mode | Read | Write | Destructive |
+| --- | --- | --- | ---: | ---: | ---: |
+| Legacy runtime | omitted | no write authorization | yes | — | — |
+| Legacy runtime | omitted | write authorization | yes | yes | — |
+| Legacy runtime | exact Read | no write authorization | yes | — | — |
+| Legacy runtime | exact ordinary Write | write authorization | — | yes | — |
+| Legacy runtime | service | write authorization | yes | yes | — |
+| Legacy runtime | service wildcard | write authorization | yes | yes | — |
+| Legacy runtime | `read` | write authorization | yes | — | — |
+| Legacy runtime | `write` | write authorization | — | yes | — |
+| Legacy runtime | `all` or `*` | write authorization | yes | yes | — |
+| Legacy runtime | `destructive` | write authorization | — | — | yes |
+| Legacy runtime | exact Destructive | write authorization | — | — | yes |
+| Legacy runtime | unknown | write authorization | — | — | — |
+| Legacy runtime | empty runtime values | write authorization | yes | yes | — |
+| Global policy | omitted `allow_tools` | default | yes | — | — |
+| Global policy | service wildcard | `allow_write: true` | yes | yes | — |
+| Global policy | `destructive` | `allow_write: true` | — | — | yes |
+| Per-account replacement | account selects `read` | selected account | yes | — | — |
+| Per-account replacement | account selects `destructive` | `allow_write: true` | — | — | yes |
+| Readonly runtime | global `all` | `--readonly` | yes | — | — |
+| Runtime narrowing | global `all` + exact Read | runtime exact selector | yes | — | — |
+| Runtime narrowing | global `destructive` | runtime `destructive` | — | — | yes |
+| Runtime narrowing | global `all` + unknown | unknown runtime selector | — | — | — |
+| Invalid persistent policy | empty list | startup validation | error | error | error |
+| Invalid persistent policy | unknown selector | startup validation | error | error | error |
+| Invalid persistent policy | write authorization without list | startup validation | error | error | error |
+
+The upgrade rule is asymmetric by design. Existing broad `write`, service,
+service-wildcard, `*`, and `all` selectors widen to include newly registered
+ordinary Write tools, but never acquire a newly registered Destructive tool.
+Destructive exposure always requires ordinary write authorization plus the
+literal `destructive` selector or the exact destructive tool name. Runtime
+selectors intersect the persistent ceiling; runtime write authorization cannot
+widen it, and readonly suppresses both mutation classes. An empty runtime list
+means no runtime narrowing, whereas an explicitly empty persistent selector
+list is invalid.
+
+
+The typed surface is grouped by service. Gmail reads are
 `gmail_search`, `gmail_get_message`, `gmail_get_thread`, `gmail_list_labels`,
 `gmail_list_drafts`, and `gmail_get_draft`; Gmail writes are
-`gmail_create_draft`, `gmail_modify_message_labels`,
+`gmail_create_draft`, `gmail_update_draft`, `gmail_modify_message_labels`,
 `gmail_modify_thread_labels`, `gmail_archive_messages`,
 `gmail_archive_threads`, `gmail_mark_messages_read`, and
 `gmail_mark_messages_unread`. Calendar reads are `calendar_events`,
 `calendar_list_calendars`, `calendar_search_events`, `calendar_get_event`,
 `calendar_freebusy`, and `calendar_find_conflicts`; Calendar writes are
-`calendar_create_event`, `calendar_respond_to_event`, `calendar_move_event`,
-`calendar_create_calendar`, `calendar_subscribe`, `calendar_unsubscribe`,
-`calendar_focus_time`, `calendar_out_of_office`, and
-`calendar_working_location`. Drive reads are `drive_search`, `drive_get`,
+`calendar_create_event`, `calendar_update_event`, `calendar_respond_to_event`,
+`calendar_move_event`, `calendar_create_calendar`, `calendar_subscribe`,
+`calendar_unsubscribe`, `calendar_focus_time`, `calendar_out_of_office`, and
+`calendar_working_location`. Drive reads are `drive_search`, `drive_get`, `drive_download`,
 `drive_list_folder`, and `drive_permissions`; Drive writes are
 `drive_create_folder`, `drive_rename`, `drive_move`, `drive_copy`,
 `drive_create_shortcut`, and `drive_create_comment`. Docs, Sheets, and Slides
 provide `docs_get`, `docs_create`, `docs_write`, `sheets_read_range`,
 `sheets_create`, `sheets_update_range`, and `slides_create_from_template`.
+The `sheets_read_range` schema requires `spreadsheet_id` and `range`; its
+optional `dimension` enum (`ROWS` or `COLUMNS`) maps to the CLI's
+`--dimension` flag. Omitting `dimension` preserves the existing CLI/API
+default, and range positionals remain after the CLI `--` delimiter.
 All arrays are bounded and all schemas are closed; attachment downloads,
-filesystem paths, generic argv, Gmail send operations, and destructive
-deletion/share operations are not part of this surface.
+filesystem paths, generic argv, Gmail send operations, and
+destructive deletion/share operations are not part of this surface.
 
-The Wave A registry snapshot is **45 typed tools: 18 Read, 27 ordinary Write,
-and 0 Destructive**. `M01`–`M10`, `G01`–`G04`/`G06`–`G11`,
-`C01`–`C06`/`C08`–`C15`, and `V01`–`V11` cover the current typed adapters.
-`R01` supplies risk annotations only. `G05` (Gmail draft update), `C07`
-(Calendar event update), and `R02` are not registered; B01 is a deferred
-transport decision, and E03 records the exclusions below. B02–B04 have not
-landed. Gmail send and Calendar deletion are separate excluded surfaces, not
-alternate names for G05 or C07.
+### Gmail drafts-only boundary (E01)
+
+The MCP Gmail write surface is drafts-only for outbound mail:
+`gmail_create_draft` and `gmail_update_draft` create or rebuild drafts and
+never send. No MCP tool is registered for Gmail send, draft-send (`post`),
+reply or reply-all (`replyall`), forward (`fwd`), autoreply, or permanent
+message deletion (`gmail batch delete`). Those excluded operations remain
+absent under exact, `gmail`, `gmail.*`, risk, `destructive`, `*`, and `all`
+selectors.
+
+The Wave C registry snapshot is **48 typed tools: 19 Read, 29 ordinary Write,
+and 0 Destructive**. `M01`–`M13`, `G01`–`G11`, `C01`–`C15`, and `V01`–`V11`
+cover the typed adapters. `R01` supplies risk annotations and `R02` supplies
+persistent/runtime policy ceilings; runtime readonly suppresses every
+ordinary write and destructive tool. B01 is the bounded binary transport
+decision, B02 implements the shared direct-CLI `--max-bytes` cap, B03
+implements the reusable inline encoder, and B04 registers the bounded
+`drive_download` Read tool. Gmail send and Calendar deletion are separate
+excluded surfaces, not alternate names for G05 or C07.
 
 Sheets literal `values_json` input is decoded once with
 `DecodeStrictForRange`. It must be a strict literal JSON 2D array, with JSON
@@ -96,28 +161,69 @@ valid. Named ranges and open-ended or partially bounded ranges such as `A:B`,
 check because Sheets resolves their size. `@file`, `@-`, and `-` expansion
 forms are rejected.
 
+### Gmail query-mutation lockout (E02)
+
+No registered Gmail mutation accepts `query` or `max`; all mutation schemas are
+closed, and their generated argv is limited to typed operation fields and
+explicit resource IDs rather than a query expansion. Callers must use the read
+path first:
+`gmail_search` → inspect message/thread IDs with the returned summaries or a
+`gmail_get_message`/`gmail_get_thread` read → call an explicit-ID label,
+archive, or read-state mutation. The archive and read-state tools accept only
+their bounded explicit-ID arrays.
+
+Draft changes follow the same boundary without a message search: locate and
+inspect a draft with `gmail_list_drafts`/`gmail_get_draft`, then call
+`gmail_update_draft` with `draft_id`. It rebuilds the full MIME message from
+inline `body` or `body_html`; omitted `to` is preserved, omitted `cc`/`bcc` are
+cleared unless reply-all derives them, existing attachments and reply lineage
+are preserved, and it never sends. `gmail_create_draft` creates a new inline
+draft; neither draft tool accepts query expansion or a max selector.
+
 ### Drive exclusions (E03)
 
-Drive upload, download, permanent delete, share, and unshare are absent from
-the MCP registry under every exact, service, risk, wildcard, and `all`
-selector. No Drive schema or child argv accepts `--permanent`, a host
-filesystem path, `--out`, stdin, or `@file`. `drive_download` remains deferred
-under B01–B04; B01 records the approved bounded inline-base64 transport only
-and does not implement or register download.
+Drive upload, permanent delete, share, and unshare remain absent from the MCP
+registry under every exact, service, risk, wildcard, and `all` selector.
+No Drive schema accepts `--permanent`, a host filesystem path, `out`,
+`overwrite`, raw stdout, stdin, or `@file`. The bounded `drive_download` Read
+tool is the B04 exception for download bytes: its only model inputs are
+explicit `file_id` and optional supported export `format`; its child uses
+server-fixed `--max-bytes 65536 --out -` solely for in-memory capture.
 
-### Bounded binary transport (B01 decision; deferred)
+### Calendar integration and specialized-field exclusions (E05)
 
-`drive_download` is not registered yet. B01 selects **inline padded standard
-base64 in the `tools/call` structured result**, rather than MCP resources. The
+`calendar_create_event` and `calendar_update_event` are ordinary-event
+schemas only. Their closed input schemas and generated argv reject Meet and
+Zoom controls, Zoom password or external-credential inputs, Places lookup and
+place-ID/language/region/API-key inputs, and password-bearing output controls.
+They also reject attachments, source URL/title fields, private/shared/other
+extended properties, and Focus Time, out-of-office, or working-location
+specialized-event fields. No integration flag is synthesized in ordinary
+Calendar argv.
+
+The dedicated `calendar_focus_time`, `calendar_out_of_office`, and
+`calendar_working_location` tools keep those specialized fields in separate
+schemas; their registration cannot widen either ordinary create/update schema.
+No Calendar Meet, Zoom, Places, or credential tool is registered under exact,
+service, wildcard, risk, or `all` selectors. Calendar output continues to
+redact Zoom join passwords by default (`pwd=REDACTED` and
+`Passcode: REDACTED`); the direct CLI password-inclusion control is not an MCP
+input.
+
+
+### Bounded binary transport (B01 decision; B03 encoder)
+
+`drive_download` is registered as a bounded Read tool in B04. B01 selects
+**inline padded standard base64 in the `tools/call` structured result**, rather
+than MCP resources. B03 implements the reusable inline encoder; it adds no
+resource URI, callback, HTTP endpoint, temporary file, or host path. The
 pinned `mark3labs/mcp-go` v0.57.0 stdio transport is newline-delimited
 JSON-RPC, and its client can consume `CallTool` structured content plus the
-JSON text fallback. Although that version also exposes `ReadResource` and
-`BlobResourceContents`, a resource design would require resource capability
-negotiation and a second `resources/read` request. The single tool-call shape
-keeps direct stdio and the intended LiteLLM route compatible without a URI,
-callback, HTTP endpoint, or resource cache.
+JSON text fallback. The single tool-call shape keeps direct stdio and the
+intended LiteLLM route compatible without resource discovery or a second
+request.
 
-The successful `stdout` object in the standard MCP envelope is:
+The successful structured content object in the standard MCP envelope is:
 
 ```json
 {
@@ -138,18 +244,24 @@ capped at 255 UTF-8 bytes, and is never interpreted as a host path.
 The raw-content ceiling is **65,536 bytes (64 KiB) per call**, inclusive. B02's
 shared `--max-bytes` CLI cap counts raw bytes with the same semantics; B04
 passes the ceiling as a server-controlled fixed argument and exposes only
-explicit `file_id` plus optional supported export `format`. B04 does not expose
-`max_bytes`, `tab`, `out`, `overwrite`, `--out -`, raw stdout, host paths,
-stdin, `@file`, or generic argv. At cap succeeds; cap+1 fails with a
-non-zero structured error (`binary_size_limit`) and no partial base64 or
+explicit `file_id` plus optional supported export `format`.
+
+For each call B04 first invokes `drive get --fields id,name,mimeType` through
+the typed child path, then invokes `drive download` with fixed
+`--max-bytes 65536 --out -` for server-side in-memory capture. The raw child
+omits only inherited `--json`; that fixed capture flag is never model supplied.
+`max_bytes`, `tab`, `out`, `overwrite`, raw stdout, host paths, stdin, `@file`,
+and generic argv are absent from the schema. At cap succeeds; cap+1 fails with
+a non-zero structured error (`binary_size_limit`) and no partial base64 or
 truncation sentinel. CLI file-output mode removes an over-limit temporary
 partial and leaves an existing destination untouched.
 
-The MCP `--max-output-bytes` stdout/stderr cap remains separate. B03 must
-detect capture overflow and reject a binary result that cannot fit rather than
-parse the current truncation marker or emit malformed JSON. The 64 KiB raw
-ceiling is sized to fit the default 102,400-byte stdout cap with base64 and
-bounded metadata overhead.
+The MCP `--max-output-bytes` stdout/stderr cap remains separate. The B03
+encoder checks the encoded binary object against that configured cap before
+constructing the result; its bounded child runner must reject capture overflow
+rather than parse the current truncation marker or emit malformed JSON. The
+64 KiB raw ceiling is sized to fit the default 102,400-byte stdout cap with
+base64 and bounded metadata overhead.
 
 Binary bytes exist only in the completed `tools/call` response. The server
 retains no URI, temporary file, cache, or replay handle; timeout, cancellation,
@@ -160,23 +272,41 @@ direct-CLI-only control and is absent from the MCP schema and argv.
 B02–B04 must cover cap−1/cap/cap+1, exact base64 and metadata, invalid MIME,
 stdout-cap overflow without malformed JSON, timeout/disconnect cleanup, repeat
 calls without collision, and rejection of all filesystem/resource/generic-argv
-escape fields. This section records the decision only; it does not implement
-download.
+escape fields.
+
+B03 supplies the reusable inline encoder used by B04. The encoder and adapter
+create no resource URI, temporary file, cache, or replay handle; their bytes
+exist only in the completed `tools/call` response.
 
 ### Tool bounds and partial failures
 
 The current schema bounds and defaults are normative alongside the registry:
-
 - Gmail search is `max` 1–100 (default 10); draft listing is 1–100 (default
-  20); explicit-ID archive/read-state arrays accept 1–1,000 IDs.
+  20); `gmail_update_draft` requires `draft_id` and at least one inline
+  `body`/`body_html`, with subject required unless a reply target is supplied.
+  Draft update rebuilds the full MIME message: omitted `to` is preserved,
+  omitted `cc`/`bcc` are cleared unless reply-all derives them, a lone plain or
+  HTML body retains that content type, and both bodies produce multipart
+  alternative. Explicit-ID archive/read-state arrays accept 1–1,000 IDs.
 - Calendar event/search results are 1–250 (default 10), calendar listing is
-  1–250 (default 100), and event/conflict `days` is 0–31. Calendar-ID arrays
-  are capped at 100, event attendees/recurrence at 100, reminders at 5, and
-  Focus Time recurrence at 100. Event notifications default to `none`;
-  Focus Time defaults to `primary`, `Focus Time`, `auto_decline=all`, and
-  `chat_status=doNotDisturb`.
-- Drive search and folder listing are 1–100 (default 20); permission listing
-  is 1–100 (default 100). Folder listing includes shared drives by default.
+  1–250 (default 100), and event/conflict `days` is 0–31. `calendar_events`
+  accepts a nonempty opaque `page_token` forwarded unchanged as
+  `--page=<token>` (including leading dashes), or bounded `all_pages`, but not
+  both; multi-calendar selectors, event types, sorting/order, and field masks
+  are outside this MCP schema.
+  Calendar-ID arrays are capped at 100, event attendees/recurrence at 100,
+  reminders at 5, and Focus Time recurrence at 100. Event notifications
+  default to `none`; `calendar_update_event` leaves omitted fields unchanged.
+  Supplied empty `summary`, `description`, `location`, `attendees`, `rrule`,
+  `reminders`, or `event_color` values serialize explicit clears. Supplied
+  guest-permission `false` values serialize disables. Empty `scope` or
+  `send_updates`, and `all_day` or timezone values without required paired
+  `start`/`end` fields, are rejected before execution.
+- Drive search and folder listing are 1–100 (default 20); `drive_search` can
+  scope to one shared drive with `drive_id`; permission listing is 1–100
+  (default 100). Folder listing includes shared drives by default; `drive_download`
+  requires `file_id`, optionally accepts the supported export `format` enum, and
+  returns inline bytes capped at 65,536 raw bytes.
 - `docs_get.max_bytes` is 0–20,000,000 (default 2,000,000), with 0 retaining
   the CLI unlimited value. `docs_write` appends by default and requires an
   explicit replace mode when append is disabled.
@@ -758,13 +888,29 @@ Workflow: `.github/workflows/ci.yml`
 
 MCP tools use three risk classes in their protocol annotations:
 
-| Risk | `readOnlyHint` | `destructiveHint` | R01 exposure |
+| Risk | `readOnlyHint` | `destructiveHint` | Exposure |
 | --- | ---: | ---: | --- |
 | Read | `true` | `false` | Existing read-only default |
 | Write | `false` | `false` | Existing write authorization |
-| Destructive | `false` | `true` | No destructive domain tools yet |
+| Destructive | `false` | `true` | Ordinary write authorization plus explicit `destructive` or exact-tool selection; no destructive domain tools yet |
 
 Every class keeps `openWorldHint=true` because MCP calls Google services.
-R01 does not add a destructive selector, authorization path, or domain tool;
-existing tool exposure remains unchanged until R02 supplies explicit
-destructive authorization.
+R01 supplied the third risk class and annotations. R02 adds the fail-closed
+destructive selection gate without registering a destructive domain tool:
+legacy/broad selectors never authorize that class, and readonly mode suppresses
+it even when both gates are configured.
+
+### Slides filesystem exclusion (E06)
+
+The typed Slides creation tool is `slides_create_from_template`. Its closed
+schema permits only `template_id`, `title`, inline repeated `replacements`,
+optional `parent`, and `exact`. Each replacement is emitted as a literal
+`--replace KEY=VALUE` pair in the exact child argv; there is no
+`--replacements` JSON file input.
+
+No Slides MCP schema accepts Markdown/source paths, local paths, stdin, `@file`
+references, output files, or generic argv/command fields. The CLI-only
+`slides create-from-markdown` command is intentionally not represented as an
+MCP tool. It remains absent under exact, Slides service, wildcard, read/write,
+destructive, `*`, and `all` selectors; selector broadening cannot introduce a
+filesystem-backed Markdown creation surface.

@@ -18,8 +18,8 @@ import (
 )
 
 type McpCmd struct {
-	AllowTool      []string `name:"allow-tool" aliases:"tool" sep:"," help:"Tool or service allowlist (default: all read-only tools). Examples: gmail.*,docs_get,sheets"`
-	AllowWrite     bool     `name:"allow-write" help:"Expose write tools. Write tools must also match --allow-tool when that flag is set."`
+	AllowTool      []string `name:"allow-tool" aliases:"tool" sep:"," help:"Tool or service allowlist (default: all read-only tools). Destructive tools additionally require an exact tool name or the destructive selector."`
+	AllowWrite     bool     `name:"allow-write" help:"Expose ordinary write tools and explicitly selected destructive tools. Write authorization is still subject to --allow-tool."`
 	ListTools      bool     `name:"list-tools" help:"Print enabled MCP tools as JSON and exit"`
 	TimeoutSeconds int      `name:"timeout-seconds" help:"Per-tool subprocess timeout" default:"60"`
 	MaxOutputBytes int      `name:"max-output-bytes" help:"Max stdout/stderr bytes captured per tool call" default:"102400"`
@@ -92,7 +92,7 @@ func (c *McpCmd) Run(ctx context.Context, flags *RootFlags) error {
 				result.IsError = true
 				return result, nil
 			}
-			return mcpRunGogTool(reqCtx, mcpRunOptions{
+			runOpts := mcpRunOptions{
 				self:           self,
 				tool:           tool,
 				baseArgs:       baseArgs,
@@ -101,7 +101,11 @@ func (c *McpCmd) Run(ctx context.Context, flags *RootFlags) error {
 				timeout:        timeout,
 				maxOutputBytes: maxOutputBytes,
 				accessToken:    directAccessToken(flags),
-			}), nil
+			}
+			if tool.Name == "drive_download" {
+				return mcpRunDriveDownload(reqCtx, runOpts), nil
+			}
+			return mcpRunGogTool(reqCtx, runOpts), nil
 		})
 	}
 	return server.ServeStdio(s)
@@ -254,15 +258,24 @@ func mcpEnabledTools(cmd McpCmd) []mcpToolSpec {
 	allow := splitCommaValues(cmd.AllowTool)
 	out := make([]mcpToolSpec, 0, len(all))
 	for _, tool := range all {
-		if tool.Risk == mcpRiskWrite && !cmd.AllowWrite {
-			continue
-		}
-		if len(allow) > 0 && !mcpToolAllowed(tool, allow) {
+		if !mcpToolVisible(tool, cmd.AllowWrite, allow) {
 			continue
 		}
 		out = append(out, tool)
 	}
 	return out
+}
+
+func mcpToolVisible(tool mcpToolSpec, allowWrite bool, selectors []string) bool {
+	if (tool.Risk == mcpRiskWrite || tool.Risk == mcpRiskDestructive) && !allowWrite {
+		return false
+	}
+	if tool.Risk == mcpRiskDestructive {
+		// Destructive tools never inherit an omitted or broad ordinary selector.
+		// They require either the literal risk selector or the exact tool name.
+		return len(selectors) > 0 && mcpToolAllowed(tool, selectors)
+	}
+	return len(selectors) == 0 || mcpToolAllowed(tool, selectors)
 }
 
 func splitCommaValues(values []string) []string {
@@ -278,6 +291,14 @@ func splitCommaValues(values []string) []string {
 }
 
 func mcpToolAllowed(tool mcpToolSpec, allow []string) bool {
+	if tool.Risk == mcpRiskDestructive {
+		for _, pattern := range allow {
+			if pattern == string(mcpRiskDestructive) || pattern == tool.Name {
+				return true
+			}
+		}
+		return false
+	}
 	for _, pattern := range allow {
 		switch pattern {
 		case "*", literalAll, string(tool.Risk), tool.Name, tool.Service:
