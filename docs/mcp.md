@@ -35,6 +35,13 @@ gog --account you@example.com mcp \
   --allow-tool gmail_search,docs_get
 ```
 
+Discover Gmail labels and drafts without exposing write tools:
+
+```bash
+gog --account you@example.com mcp \
+  --allow-tool gmail_list_labels,gmail_list_drafts,gmail_get_draft
+```
+
 Expose Docs read/write tools:
 
 ```bash
@@ -160,6 +167,9 @@ Read tools:
 | `gmail_search` | Search Gmail messages with Gmail query syntax. |
 | `gmail_get_message` | Read one Gmail message by ID. Sanitized content is on by default. |
 | `gmail_get_thread` | Read one Gmail thread by ID. Sanitized content is on by default. |
+| `gmail_list_labels` | List Gmail labels. |
+| `gmail_list_drafts` | List draft metadata with bounded, caller-controlled paging. |
+| `gmail_get_draft` | Read one draft by ID without downloading attachments. |
 | `drive_search` | Search Drive files by text or Drive query language. |
 | `drive_get` | Read Drive file metadata by ID. |
 | `docs_get` | Read a Google Doc as wrapped text, optionally one tab or all tabs. |

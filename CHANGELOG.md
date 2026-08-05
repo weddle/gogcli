@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- MCP: add typed read-only Gmail tools for label discovery and bounded draft listing and retrieval.
 - Gmail: warn before a draft update replaces an existing rich-text body with plain text only, while keeping JSON stdout clean. (#955) — thanks @mcinteerj.
 - Dependencies: update the Google API and OpenTelemetry stacks, Go developer tools, pnpm, and email-tracking worker toolchain to their latest policy-eligible releases.
 - Docs: rewrite the README as a concise front door and move task examples into a dedicated guide.

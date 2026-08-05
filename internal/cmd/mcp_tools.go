@@ -16,6 +16,9 @@ func mcpAllTools() []mcpToolSpec {
 		mcpGmailSearchTool(),
 		mcpGmailGetMessageTool(),
 		mcpGmailGetThreadTool(),
+		mcpGmailListLabelsTool(),
+		mcpGmailListDraftsTool(),
+		mcpGmailGetDraftTool(),
 		mcpDriveSearchTool(),
 		mcpDriveGetTool(),
 		mcpDocsGetTool(),
@@ -99,6 +102,58 @@ func mcpGmailGetThreadTool() mcpToolSpec {
 				args = append(args, "--full")
 			}
 			return append(args, "--", threadID), nil
+		},
+	}
+}
+
+func mcpGmailListLabelsTool() mcpToolSpec {
+	return mcpToolSpec{
+		Name:        "gmail_list_labels",
+		Service:     "gmail",
+		Risk:        mcpRiskRead,
+		Description: "List Gmail labels.",
+		Options:     []mcp.ToolOption{},
+		BuildArgs: func(req mcp.CallToolRequest) ([]string, error) {
+			return []string{"gmail", "labels", "list"}, nil
+		},
+	}
+}
+
+func mcpGmailListDraftsTool() mcpToolSpec {
+	return mcpToolSpec{
+		Name:        "gmail_list_drafts",
+		Service:     "gmail",
+		Risk:        mcpRiskRead,
+		Description: "List Gmail drafts with bounded paging.",
+		Options: []mcp.ToolOption{
+			mcp.WithInteger("max", mcp.Description("Maximum results"), mcp.DefaultNumber(20), mcp.Min(1), mcp.Max(100)),
+			mcp.WithString("page_token", mcp.Description("Opaque page token")),
+		},
+		BuildArgs: func(req mcp.CallToolRequest) ([]string, error) {
+			args := []string{"gmail", "drafts", "list", "--max", strconv.Itoa(clampMCPInt(req.GetInt("max", 20), 1, 100))}
+			if token := strings.TrimSpace(req.GetString("page_token", "")); token != "" {
+				args = append(args, "--page="+token)
+			}
+			return args, nil
+		},
+	}
+}
+
+func mcpGmailGetDraftTool() mcpToolSpec {
+	return mcpToolSpec{
+		Name:        "gmail_get_draft",
+		Service:     "gmail",
+		Risk:        mcpRiskRead,
+		Description: "Get one Gmail draft by ID without downloading attachments.",
+		Options: []mcp.ToolOption{
+			mcp.WithString("draft_id", mcp.Description("Gmail draft ID"), mcp.Required()),
+		},
+		BuildArgs: func(req mcp.CallToolRequest) ([]string, error) {
+			id, err := requireMCPString(req, "draft_id")
+			if err != nil {
+				return nil, err
+			}
+			return []string{"gmail", "drafts", "get", "--", id}, nil
 		},
 	}
 }
