@@ -538,6 +538,67 @@ func TestAuthAddCmd_GmailScopeReadonly(t *testing.T) {
 	}
 }
 
+func TestAuthAddCmd_GmailScopeModify(t *testing.T) {
+	openSecretsStore, authorizeGoogle, ensureKeychainAccess, fetchAuthorizedIdentity := defaultAuthTestOperations()
+	execute := func(args []string) error {
+		return executeWithRuntime(args, runtimeWithAuthTestOperations(
+			openSecretsStore, authorizeGoogle, ensureKeychainAccess, fetchAuthorizedIdentity,
+		))
+	}
+
+	ensureKeychainAccess = func(context.Context) error { return nil }
+
+	store := newMemSecretsStore()
+	openSecretsStore = func() (secrets.Store, error) { return store, nil }
+
+	var gotOpts googleauth.AuthorizeOptions
+	authorizeGoogle = func(ctx context.Context, opts googleauth.AuthorizeOptions) (string, error) {
+		gotOpts = opts
+		gotOpts.Services = append([]googleauth.Service(nil), opts.Services...)
+		gotOpts.Scopes = append([]string(nil), opts.Scopes...)
+		return "rt", nil
+	}
+	fetchAuthorizedIdentity = func(context.Context, string, string, []string, time.Duration) (googleauth.Identity, error) {
+		return googleauth.Identity{Email: "user@example.com"}, nil
+	}
+
+	_ = captureStdout(t, func() {
+		_ = captureStderr(t, func() {
+			if err := execute([]string{
+				"--json",
+				"auth",
+				"add",
+				"user@example.com",
+				"--services",
+				"gmail,drive",
+				"--gmail-scope",
+				"modify",
+			}); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+		})
+	})
+
+	if !containsStringInSlice(gotOpts.Scopes, "https://www.googleapis.com/auth/gmail.modify") {
+		t.Fatalf("missing gmail.modify in %v", gotOpts.Scopes)
+	}
+	for _, notWanted := range []string{
+		"https://www.googleapis.com/auth/gmail.readonly",
+		"https://www.googleapis.com/auth/gmail.settings.basic",
+		"https://www.googleapis.com/auth/gmail.settings.sharing",
+	} {
+		if containsStringInSlice(gotOpts.Scopes, notWanted) {
+			t.Fatalf("unexpected %q in %v", notWanted, gotOpts.Scopes)
+		}
+	}
+	if !containsStringInSlice(gotOpts.Scopes, "https://www.googleapis.com/auth/drive") {
+		t.Fatalf("missing drive in %v", gotOpts.Scopes)
+	}
+	if !gotOpts.DisableIncludeGrantedScopes {
+		t.Fatalf("expected DisableIncludeGrantedScopes when using --gmail-scope=modify")
+	}
+}
+
 func TestAuthAddCmd_DriveScopeReadonly(t *testing.T) {
 	openSecretsStore, authorizeGoogle, ensureKeychainAccess, fetchAuthorizedIdentity := defaultAuthTestOperations()
 	execute := func(args []string) error {

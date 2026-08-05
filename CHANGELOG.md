@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Auth: add `--gmail-scope=modify` to request Gmail mutation access without unrelated Gmail settings scopes, and disable incremental scope carryover for that limited grant.
 - Dependencies: update the Go developer tools, pnpm, and email-tracking worker transitive pins to their latest releases.
 - Docs: rewrite the README as a concise front door and move task examples into a dedicated guide.
 - MCP: reject explicitly empty `docs_write` tabs before execution and preserve exact argv for append, replace, markdown, tab, and leading-dash text inputs.

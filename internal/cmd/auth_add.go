@@ -29,7 +29,7 @@ type AuthAddCmd struct {
 	ForceConsent bool          `name:"force-consent" help:"Force consent screen to obtain a refresh token"`
 	ServicesCSV  string        `name:"services" help:"Services to authorize: user|all-user or comma-separated ${auth_services}; explicit opt-in: photospicker; all means all default user OAuth services. Workspace service-account-only services: admin, groups, keep" default:"user"`
 	DriveScope   string        `name:"drive-scope" help:"Drive scope mode: full|readonly|file" enum:"full,readonly,file" default:"full"`
-	GmailScope   string        `name:"gmail-scope" help:"Gmail scope mode: full|readonly" enum:"full,readonly" default:"full"`
+	GmailScope   string        `name:"gmail-scope" help:"Gmail scope mode: full|modify|readonly" enum:"full,modify,readonly" default:"full"`
 	ExtraScopes  string        `name:"extra-scopes" help:"Comma-separated list of additional OAuth scope URIs to request (appended after service scopes)"`
 }
 
@@ -92,6 +92,14 @@ func (c *AuthAddCmd) isManualFlow(authURL, authCode string) bool {
 	return c.Manual || c.Remote || authURL != "" || authCode != "" || strings.TrimSpace(c.RedirectURI) != ""
 }
 
+func disableIncrementalAuth(readonly bool, driveScope, gmailScope string) bool {
+	return readonly ||
+		driveScope == "readonly" ||
+		driveScope == strFile ||
+		gmailScope == "readonly" ||
+		gmailScope == "modify"
+}
+
 func (c *AuthAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
 	readonly := readOnlyEnabled(flags)
@@ -115,10 +123,7 @@ func (c *AuthAddCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("cannot combine --readonly with --drive-scope=file (file is write-capable)")
 	}
 	gmailScope := strings.ToLower(strings.TrimSpace(c.GmailScope))
-	disableIncludeGrantedScopes := readonly ||
-		driveScope == "readonly" ||
-		driveScope == strFile ||
-		gmailScope == "readonly"
+	disableIncludeGrantedScopes := disableIncrementalAuth(readonly, driveScope, gmailScope)
 
 	extraScopes := parseExtraScopesCSV(c.ExtraScopes)
 
