@@ -651,16 +651,30 @@ func (c *CalendarDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
+	var truncated []string
+	if scope == scopeFuture {
+		truncated, err = truncateRecurrence(resolution.ParentRecurrence, c.OriginalStartTime)
+		if err != nil {
+			return err
+		}
+	}
+
 	if err := mutation.deleteEvent(ctx, resolution.TargetEventID, sendUpdates); err != nil {
 		return err
 	}
 	if scope == scopeFuture {
-		truncated, truncateErr := truncateRecurrence(resolution.ParentRecurrence, c.OriginalStartTime)
-		if truncateErr != nil {
-			return truncateErr
-		}
 		_, patchErr := mutation.patchEvent(ctx, resolution.ParentEventID, &calendar.Event{Recurrence: truncated}, sendUpdates)
 		if patchErr != nil {
+			// Future-scope deletion is non-atomic: the selected instance is
+			// already gone even though truncating the parent series failed.
+			// Preserve exact IDs so callers can inspect and repair the series.
+			_ = writeResult(ctx, u,
+				kv("deleted", true),
+				kv("calendarId", mutation.calendarID),
+				kv("eventId", resolution.TargetEventID),
+				kv("parentEventId", resolution.ParentEventID),
+				kv("seriesUpdated", false),
+			)
 			return patchErr
 		}
 	}

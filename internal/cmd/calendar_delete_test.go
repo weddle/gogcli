@@ -184,6 +184,49 @@ func TestCalendarDeleteCmd_ScopeFuture(t *testing.T) {
 	}
 }
 
+func TestCalendarDeleteCmd_ScopeFutureInvalidRecurrenceDoesNotDelete(t *testing.T) {
+	var deleteCalls, patchCalls int
+	svc, closeSvc := newCalendarServiceForTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
+		switch {
+		case r.Method == http.MethodGet && path == "/calendars/cal@example.com/events/ev":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "ev", "recurrence": []string{"EXDATE:20250804T090000Z"},
+			})
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/calendars/cal@example.com/events/ev/instances"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{{
+				"id":                "ev_2",
+				"originalStartTime": map[string]any{"dateTime": "2025-01-02T10:00:00Z"},
+			}}})
+		case r.Method == http.MethodDelete:
+			deleteCalls++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPatch:
+			patchCalls++
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer closeSvc()
+	ctx, _ := newCalendarTestJSONContext(t, svc)
+	cmd := CalendarDeleteCmd{
+		CalendarID:        "cal@example.com",
+		EventID:           "ev",
+		Scope:             scopeFuture,
+		OriginalStartTime: "2025-01-02T10:00:00Z",
+	}
+	err := cmd.Run(ctx, &RootFlags{Account: "a@b.com", Force: true})
+	if err == nil || !strings.Contains(err.Error(), "RRULE") {
+		t.Fatalf("invalid recurrence error = %v, want RRULE failure", err)
+	}
+	if deleteCalls != 0 || patchCalls != 0 {
+		t.Fatalf("provider mutation calls delete=%d patch=%d, want 0/0", deleteCalls, patchCalls)
+	}
+}
+
 func TestCalendarDeleteCmd_DryRunSkipsService(t *testing.T) {
 	called := false
 	factory := func(context.Context, string) (*calendar.Service, error) {

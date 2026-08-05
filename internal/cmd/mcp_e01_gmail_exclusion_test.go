@@ -108,6 +108,29 @@ func TestMCPE01GmailSendAndPermanentDeleteExcludedAcrossSelectors(t *testing.T) 
 	}
 }
 
+func TestMCPE01GmailDestructiveDraftDeleteAndTrashAreAllowed(t *testing.T) {
+	for _, name := range []string{"gmail_delete_draft", "gmail_trash_messages"} {
+		spec := findMCPTool(t, name)
+		if spec.Service != "gmail" || spec.Risk != mcpRiskDestructive {
+			t.Fatalf("%s metadata = service %q risk %q, want Gmail Destructive", name, spec.Service, spec.Risk)
+		}
+		for _, selector := range []string{"", "write", "gmail", "gmail.*", "all", "*"} {
+			cmd := McpCmd{AllowWrite: true}
+			if selector != "" {
+				cmd.AllowTool = []string{selector}
+			}
+			if hasMCPTool(mcpEnabledTools(cmd), name) {
+				t.Fatalf("ordinary selector %q exposed allowed destructive tool %q", selector, name)
+			}
+		}
+		for _, selector := range []string{"destructive", name} {
+			if !hasMCPTool(mcpEnabledTools(McpCmd{AllowWrite: true, AllowTool: []string{selector}}), name) {
+				t.Fatalf("explicit destructive selector %q omitted allowed tool", selector)
+			}
+		}
+	}
+}
+
 func mcpE01ForbiddenGmailToolName(name string) bool {
 	name = strings.ToLower(strings.ReplaceAll(name, "_", "-"))
 	for _, token := range []string{

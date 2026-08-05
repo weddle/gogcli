@@ -65,6 +65,14 @@ func mcpAllTools() []mcpToolSpec {
 		mcpSheetsCreateTool(),
 		mcpSheetsUpdateRangeTool(),
 		mcpSlidesCreateFromTemplateTool(),
+
+		// Destructive tools require explicit write authorization and a destructive selector.
+		mcpGmailDeleteDraftTool(),
+		mcpGmailTrashMessagesTool(),
+		mcpCalendarDeleteEventTool(),
+		mcpDriveTrashTool(),
+		mcpDriveShareUserTool(),
+		mcpDriveUnshareTool(),
 	}
 }
 
@@ -502,6 +510,23 @@ func mcpGmailGetDraftTool() mcpToolSpec {
 	}
 }
 
+func mcpGmailDeleteDraftTool() mcpToolSpec {
+	return mcpToolSpec{
+		Name: "gmail_delete_draft", Service: "gmail", Risk: mcpRiskDestructive,
+		Description: "Permanently delete one Gmail draft by ID. Drafts are not moved to Trash and cannot be recovered. Requires ordinary write authorization plus explicit destructive authorization.",
+		Options: []mcp.ToolOption{
+			mcp.WithString("draft_id", mcp.Description("Gmail draft ID"), mcp.Required()),
+		},
+		BuildArgs: func(req mcp.CallToolRequest) ([]string, error) {
+			id, err := requireMCPString(req, "draft_id")
+			if err != nil {
+				return nil, err
+			}
+			return []string{"gmail", "drafts", "delete", "--force", "--", id}, nil
+		},
+	}
+}
+
 func mcpGmailCreateDraftTool() mcpToolSpec {
 	return mcpToolSpec{
 		Name: "gmail_create_draft", Service: "gmail", Risk: mcpRiskWrite,
@@ -565,7 +590,7 @@ func mcpGmailCreateDraftTool() mcpToolSpec {
 func mcpGmailModifyMessageLabelsTool() mcpToolSpec {
 	return mcpGmailModifyLabelsTool(
 		"gmail_modify_message_labels",
-		"Modify labels on one Gmail message by ID. Requires --allow-write.",
+		"Modify non-trash labels on one Gmail message by ID. Requires --allow-write; use gmail_trash_messages for Trash.",
 		"message_id",
 		[]string{"gmail", "messages", "modify"},
 	)
@@ -574,7 +599,7 @@ func mcpGmailModifyMessageLabelsTool() mcpToolSpec {
 func mcpGmailModifyThreadLabelsTool() mcpToolSpec {
 	return mcpGmailModifyLabelsTool(
 		"gmail_modify_thread_labels",
-		"Modify labels on one Gmail thread by ID. Requires --allow-write.",
+		"Modify non-trash labels on one Gmail thread by ID. Requires --allow-write; moving threads to Trash is not exposed.",
 		"thread_id",
 		[]string{"gmail", "thread", "modify"},
 	)
@@ -597,6 +622,11 @@ func mcpGmailModifyLabelsTool(name, description, idField string, prefix []string
 			remove := strings.TrimSpace(req.GetString("remove", ""))
 			if add == "" && remove == "" {
 				return nil, fmt.Errorf("must specify add and/or remove")
+			}
+			for _, label := range strings.Split(add, ",") {
+				if strings.EqualFold(strings.TrimSpace(label), "TRASH") {
+					return nil, fmt.Errorf("adding the TRASH label is destructive; use gmail_trash_messages with explicit destructive authorization")
+				}
 			}
 			args := append([]string(nil), prefix...)
 			if add != "" {
@@ -626,6 +656,38 @@ func mcpGmailMarkMessagesUnreadTool() mcpToolSpec {
 	return mcpGmailExplicitIDsTool("gmail_mark_messages_unread", "Mark Gmail messages as unread by explicit ID.", "message_ids", []string{"gmail", "unread", "--"})
 }
 
+func mcpGmailTrashMessagesTool() mcpToolSpec {
+	return mcpToolSpec{
+		Name: "gmail_trash_messages", Service: "gmail", Risk: mcpRiskDestructive,
+		Description: "Move explicit Gmail messages to Trash. Gmail keeps trashed messages recoverable for its retention window; requires --allow-write and explicit destructive authorization.",
+		Options: []mcp.ToolOption{
+			mcp.WithArray("message_ids", mcp.Description("Explicit Gmail message IDs to move to Trash"), mcp.Required(), mcp.MinItems(1), mcp.MaxItems(1000), mcp.WithStringItems()),
+		},
+		BuildArgs: func(req mcp.CallToolRequest) ([]string, error) {
+			ids, err := requireMCPGmailTrashMessageIDs(req)
+			if err != nil {
+				return nil, err
+			}
+			return append([]string{"gmail", "trash"}, ids...), nil
+		},
+	}
+}
+
+func requireMCPGmailTrashMessageIDs(req mcp.CallToolRequest) ([]string, error) {
+	ids, err := requireMCPStringArray(req, "message_ids", 1000)
+	if err != nil {
+		return nil, err
+	}
+	for i, id := range ids {
+		for _, r := range id {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+				return nil, fmt.Errorf("message_ids[%d] must contain only letters and digits", i)
+			}
+		}
+	}
+	return ids, nil
+}
+
 func mcpGmailExplicitIDsTool(name, description, field string, prefix []string) mcpToolSpec {
 	return mcpToolSpec{
 		Name: name, Service: "gmail", Risk: mcpRiskWrite, Description: description + " Requires --allow-write.",
@@ -638,6 +700,9 @@ func mcpGmailExplicitIDsTool(name, description, field string, prefix []string) m
 				return nil, err
 			}
 			args := append([]string(nil), prefix...)
+			if len(args) == 0 || args[len(args)-1] != "--" {
+				args = append(args, "--")
+			}
 			return append(args, ids...), nil
 		},
 	}

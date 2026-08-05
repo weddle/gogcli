@@ -8,8 +8,9 @@ import (
 )
 
 type mcpE02GmailMutationFixture struct {
-	arguments map[string]any
-	wantArgv  []string
+	arguments   map[string]any
+	wantArgv    []string
+	destructive bool
 }
 
 func mcpE02GmailMutationFixtures() map[string]mcpE02GmailMutationFixture {
@@ -32,11 +33,11 @@ func mcpE02GmailMutationFixtures() map[string]mcpE02GmailMutationFixture {
 		},
 		"gmail_archive_messages": {
 			arguments: map[string]any{"message_ids": []string{"m1", "m2"}},
-			wantArgv:  []string{"gmail", "archive", "m1", "m2"},
+			wantArgv:  []string{"gmail", "archive", "--", "m1", "m2"},
 		},
 		"gmail_archive_threads": {
 			arguments: map[string]any{"thread_ids": []string{"t1", "t2"}},
-			wantArgv:  []string{"gmail", "archive", "--thread", "t1", "t2"},
+			wantArgv:  []string{"gmail", "archive", "--thread", "--", "t1", "t2"},
 		},
 		"gmail_mark_messages_read": {
 			arguments: map[string]any{"message_ids": []string{"m1"}},
@@ -45,6 +46,16 @@ func mcpE02GmailMutationFixtures() map[string]mcpE02GmailMutationFixture {
 		"gmail_mark_messages_unread": {
 			arguments: map[string]any{"message_ids": []string{"m1"}},
 			wantArgv:  []string{"gmail", "unread", "--", "m1"},
+		},
+		"gmail_delete_draft": {
+			arguments:   map[string]any{"draft_id": "d1"},
+			wantArgv:    []string{"gmail", "drafts", "delete", "--force", "--", "d1"},
+			destructive: true,
+		},
+		"gmail_trash_messages": {
+			arguments:   map[string]any{"message_ids": []string{"m1", "m2"}},
+			wantArgv:    []string{"gmail", "trash", "m1", "m2"},
+			destructive: true,
 		},
 	}
 }
@@ -94,6 +105,30 @@ func TestMCPE02GmailMutationRegistryAndArgvRejectQueryExpansion(t *testing.T) {
 			}
 		}
 	}
+
+	for _, toolName := range []string{"gmail_archive_messages", "gmail_archive_threads"} {
+		fixture := fixtures[toolName]
+		field := "message_ids"
+		if toolName == "gmail_archive_threads" {
+			field = "thread_ids"
+		}
+		injected := cloneMCPE02Arguments(fixture.arguments)
+		injected[field] = []string{"--query=is:inbox", "--max=1000000"}
+		args, err := findMCPTool(t, toolName).BuildArgs(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: injected}})
+		if err != nil {
+			t.Fatalf("%s leading-dash IDs: %v", toolName, err)
+		}
+		separator := -1
+		for i, arg := range args {
+			if arg == "--" {
+				separator = i
+				break
+			}
+		}
+		if separator < 0 || separator+2 >= len(args) || args[separator+1] != "--query=is:inbox" || args[separator+2] != "--max=1000000" {
+			t.Fatalf("%s did not protect leading-dash IDs with --: %#v", toolName, args)
+		}
+	}
 	for name := range fixtures {
 		if !seen[name] {
 			t.Fatalf("expected Gmail mutation %q in MCP registry", name)
@@ -102,9 +137,26 @@ func TestMCPE02GmailMutationRegistryAndArgvRejectQueryExpansion(t *testing.T) {
 
 	for _, selector := range []string{"gmail", "gmail.*", "write", "all"} {
 		tools := mcpEnabledTools(McpCmd{AllowWrite: true, AllowTool: []string{selector}})
-		for name := range fixtures {
-			if !hasMCPTool(tools, name) {
+		for name, fixture := range fixtures {
+			exposed := hasMCPTool(tools, name)
+			if fixture.destructive {
+				if exposed {
+					t.Errorf("ordinary selector %q exposed destructive Gmail mutation %q", selector, name)
+				}
+				continue
+			}
+			if !exposed {
 				t.Errorf("authorized selector %q omitted registered Gmail mutation %q", selector, name)
+			}
+		}
+	}
+	for name, fixture := range fixtures {
+		if !fixture.destructive {
+			continue
+		}
+		for _, selector := range []string{"destructive", name} {
+			if !hasMCPTool(mcpEnabledTools(McpCmd{AllowWrite: true, AllowTool: []string{selector}}), name) {
+				t.Errorf("explicit destructive selector %q omitted registered Gmail mutation %q", selector, name)
 			}
 		}
 	}

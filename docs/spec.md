@@ -57,14 +57,16 @@ After an upgrade they include newly registered ordinary tools in the selected
 class, subject to the same read-only and `--allow-write` checks. The literal
 `destructive` selector is the only risk-wide destructive opt-in; existing
 ordinary `write`, service, service-wildcard, `*`, and `all` policies do not
-acquire deferred destructive tools.
+acquire registered destructive tools.
 
 ### Policy migration compatibility matrix
 
 This is the binary compatibility contract for the legacy runtime and persistent
 MCP policies. `Read`, `Write`, and `Destructive` are `tools/list` visibility
-results for representative tools; the current registry has no destructive
-domain tool, so destructive rows are fixture behavior only.
+results for representative tools; destructive rows now cover the registered
+destructive domain tools, including `gmail_delete_draft`,
+`gmail_trash_messages`, `calendar_delete_event`, `drive_trash`,
+`drive_share_user`, and `drive_unshare`.
 
 | Context | Selector | Gate/mode | Read | Write | Destructive |
 | --- | --- | --- | ---: | ---: | ---: |
@@ -107,49 +109,57 @@ list is invalid.
 
 The typed surface is grouped by service. Gmail reads are
 `gmail_search`, `gmail_get_message`, `gmail_get_thread`, `gmail_list_labels`,
-`gmail_list_drafts`, and `gmail_get_draft`; Gmail writes are
+`gmail_list_drafts`, and `gmail_get_draft`; ordinary Gmail writes are
 `gmail_create_draft`, `gmail_update_draft`, `gmail_modify_message_labels`,
 `gmail_modify_thread_labels`, `gmail_archive_messages`,
 `gmail_archive_threads`, `gmail_mark_messages_read`, and
-`gmail_mark_messages_unread`. Calendar reads are `calendar_events`,
-`calendar_list_calendars`, `calendar_search_events`, `calendar_get_event`,
-`calendar_freebusy`, and `calendar_find_conflicts`; Calendar writes are
-`calendar_create_event`, `calendar_update_event`, `calendar_respond_to_event`,
-`calendar_move_event`, `calendar_create_calendar`, `calendar_subscribe`,
-`calendar_unsubscribe`, `calendar_focus_time`, `calendar_out_of_office`, and
-`calendar_working_location`. Drive reads are `drive_search`, `drive_get`, `drive_download`,
-`drive_list_folder`, and `drive_permissions`; Drive writes are
-`drive_create_folder`, `drive_rename`, `drive_move`, `drive_copy`,
-`drive_create_shortcut`, and `drive_create_comment`. Docs, Sheets, and Slides
-provide `docs_get`, `docs_create`, `docs_write`, `sheets_read_range`,
+`gmail_mark_messages_unread`; Gmail destructive tools are
+`gmail_delete_draft` and `gmail_trash_messages`. Calendar reads are
+`calendar_events`, `calendar_list_calendars`, `calendar_search_events`,
+`calendar_get_event`, `calendar_freebusy`, and `calendar_find_conflicts`;
+Calendar writes are `calendar_create_event`, `calendar_update_event`,
+`calendar_respond_to_event`, `calendar_move_event`, `calendar_create_calendar`,
+`calendar_subscribe`, `calendar_unsubscribe`, `calendar_focus_time`,
+`calendar_out_of_office`, and `calendar_working_location`; Calendar
+destructive tools are `calendar_delete_event` only for explicit event or
+recurrence-range deletion. Drive reads are `drive_search`, `drive_get`,
+`drive_download`, `drive_list_folder`, and `drive_permissions`; Drive writes
+are `drive_create_folder`, `drive_rename`, `drive_move`, `drive_copy`,
+`drive_create_shortcut`, and `drive_create_comment`; Drive destructive tools
+are `drive_trash`, `drive_share_user`, and `drive_unshare`. Docs, Sheets, and
+Slides provide `docs_get`, `docs_create`, `docs_write`, `sheets_read_range`,
 `sheets_create`, `sheets_update_range`, and `slides_create_from_template`.
 The `sheets_read_range` schema requires `spreadsheet_id` and `range`; its
 optional `dimension` enum (`ROWS` or `COLUMNS`) maps to the CLI's
 `--dimension` flag. Omitting `dimension` preserves the existing CLI/API
 default, and range positionals remain after the CLI `--` delimiter.
 All arrays are bounded and all schemas are closed; attachment downloads,
-filesystem paths, generic argv, Gmail send operations, and
-destructive deletion/share operations are not part of this surface.
+filesystem paths, generic argv, and Gmail send operations are not part of this
+surface. Permanent Gmail message deletion, Drive upload/permanent deletion,
+whole-calendar deletion, and unscoped Drive sharing remain excluded.
 
 ### Gmail drafts-only boundary (E01)
 
 The MCP Gmail write surface is drafts-only for outbound mail:
 `gmail_create_draft` and `gmail_update_draft` create or rebuild drafts and
-never send. No MCP tool is registered for Gmail send, draft-send (`post`),
-reply or reply-all (`replyall`), forward (`fwd`), autoreply, or permanent
-message deletion (`gmail batch delete`). Those excluded operations remain
-absent under exact, `gmail`, `gmail.*`, risk, `destructive`, `*`, and `all`
-selectors.
+never send. `gmail_delete_draft` is a separate Destructive tool: it permanently
+deletes one explicitly identified draft, does not move it to Trash, and offers
+no recovery path. `gmail_trash_messages` is also a separate Destructive tool:
+it moves only explicit message IDs to recoverable Trash. Both require ordinary
+write authorization plus an explicit `destructive` or exact-tool selector.
+Ordinary message/thread label tools reject adding `TRASH`, so they cannot
+bypass this Destructive gate; thread trash remains structurally unavailable.
+Gmail send, draft-send (`post`), reply or reply-all (`replyall`), forward (`fwd`),
+autoreply, and permanent message deletion (`gmail batch delete`) remain absent
+under exact, `gmail`, `gmail.*`, risk, `*`, and `all` selectors.
 
-The Wave C registry snapshot is **48 typed tools: 19 Read, 29 ordinary Write,
-and 0 Destructive**. `M01`–`M13`, `G01`–`G11`, `C01`–`C15`, and `V01`–`V11`
-cover the typed adapters. `R01` supplies risk annotations and `R02` supplies
-persistent/runtime policy ceilings; runtime readonly suppresses every
-ordinary write and destructive tool. B01 is the bounded binary transport
-decision, B02 implements the shared direct-CLI `--max-bytes` cap, B03
-implements the reusable inline encoder, and B04 registers the bounded
-`drive_download` Read tool. Gmail send and Calendar deletion are separate
-excluded surfaces, not alternate names for G05 or C07.
+The final Wave D registry contains **54 typed tools: 19 Read, 29 ordinary
+Write, and 6 Destructive**. `M01`–`M13`, `G01`–`G11`, `C01`–`C15`, and
+`V01`–`V11` cover the earlier typed adapters; `X01`–`X06` are the six
+explicitly authorized destructive tools. `R01`–`R03` supply risk annotations
+and persistent/runtime policy ceilings. B01–B04 supply bounded binary
+transport and the Drive download Read tool. Runtime readonly suppresses every
+ordinary write and destructive tool.
 
 Sheets literal `values_json` input is decoded once with
 `DecodeStrictForRange`. It must be a strict literal JSON 2D array, with JSON
@@ -169,8 +179,8 @@ explicit resource IDs rather than a query expansion. Callers must use the read
 path first:
 `gmail_search` → inspect message/thread IDs with the returned summaries or a
 `gmail_get_message`/`gmail_get_thread` read → call an explicit-ID label,
-archive, or read-state mutation. The archive and read-state tools accept only
-their bounded explicit-ID arrays.
+archive, read-state, or `gmail_trash_messages` mutation. Archive, read-state,
+and trash tools accept only bounded explicit-ID arrays.
 
 Draft changes follow the same boundary without a message search: locate and
 inspect a draft with `gmail_list_drafts`/`gmail_get_draft`, then call
@@ -180,15 +190,78 @@ cleared unless reply-all derives them, existing attachments and reply lineage
 are preserved, and it never sends. `gmail_create_draft` creates a new inline
 draft; neither draft tool accepts query expansion or a max selector.
 
+`gmail_trash_messages` accepts 1–1,000 alphanumeric message IDs and never
+accepts query, max, thread, permanent-delete, force, or generic argv fields.
+It adds `TRASH` and removes `INBOX` through one aggregate `BatchModify`
+request. Success exposes aggregate action/count and labels only; provider
+failure is a non-zero child/MCP error envelope with no per-item success/error
+records. Provider effects are indeterminate on failure because no per-item
+evidence is returned. Messages stay recoverable during Gmail's retention
+window.
+
+### Drive trash (X04)
+
+`drive_trash` is a Destructive tool that requires explicit `file_id` and
+invokes only the default `gog drive delete --force -- FILE_ID` trash path.
+The `--force` confirmation bypass is server-controlled; it is not an MCP
+input. The closed schema exposes no `permanent`, path, upload, stdin, or
+generic argv controls, so permanent deletion is not reachable through this
+tool.
+
 ### Drive exclusions (E03)
 
-Drive upload, permanent delete, share, and unshare remain absent from the MCP
-registry under every exact, service, risk, wildcard, and `all` selector.
-No Drive schema accepts `--permanent`, a host filesystem path, `out`,
-`overwrite`, raw stdout, stdin, or `@file`. The bounded `drive_download` Read
-tool is the B04 exception for download bytes: its only model inputs are
-explicit `file_id` and optional supported export `format`; its child uses
-server-fixed `--max-bytes 65536 --out -` solely for in-memory capture.
+Drive `drive_trash`, `drive_share_user`, and `drive_unshare` are the three
+narrow Drive Destructive tools. They require ordinary write authorization plus
+the literal `destructive` or exact-tool selector; service, wildcard, `write`,
+`*`, and `all` selectors do not expose them.
+Drive upload and permanent delete remain absent under every exact, service,
+risk, wildcard, and `all` selector. No Drive schema accepts `--permanent`, a
+host filesystem path, `out`, `overwrite`, raw stdout, stdin, `@file`, or
+generic argv. The bounded `drive_download` Read tool is the B04 exception for
+download bytes: its only model inputs are explicit `file_id` and optional
+supported export `format`; its child uses server-fixed `--max-bytes 65536
+--out -` solely for in-memory capture.
+
+### Drive sharing grant (X05)
+
+`drive_share_user` is a Destructive user-only grant. Its closed schema requires
+`file_id` and a plain email; optional `role` is `reader`, `commenter`, or
+`writer` (reader default). The target is always `type=user`, notification is
+always disabled, and discoverability is false. Public, domain, owner, notify,
+force, path, and generic action/argv inputs are absent. The adapter reuses the
+CLI email and role validators and emits
+`drive share --to user --email EMAIL --role ROLE -- FILE_ID`.
+
+Permission creation and web-link lookup are a non-atomic two-step operation.
+If creation succeeds but lookup fails, the command returns the original
+provider error and the MCP result remains failed (`exit_code` non-zero and
+`IsError` true); it never silently reports success. In JSON/MCP output,
+structured permission evidence still includes the created `permissionId` and
+`permission` object. This is a residual grant: reverse it with
+`drive_unshare(file_id, permission_id)` using that exact ID, then re-list with
+`drive_permissions` to verify cleanup. No compensation delete is attempted.
+
+### Drive permission removal (X06)
+
+`drive_unshare` removes exactly one permission. Its closed schema requires only
+`file_id` and `permission_id`; its fixed child argv is
+`drive unshare --force -- FILE_ID PERMISSION_ID`, with `--force` supplied by the
+server. Callers must first use `drive_permissions` to inspect the exact
+permission ID. The tool does not enumerate, re-target, trash, or permanently
+delete files, and parent dry-run exits before auth/service construction.
+
+### Calendar event deletion (X01/E04)
+
+`calendar_delete_event` is the only Calendar deletion tool. It requires
+`calendar_id`, `event_id`, and an explicit `scope` enum (`single`, `future`, or
+`all`); `original_start` is required for `single`/`future` and rejected for
+`all`. `send_updates` defaults to `none`, and the server appends `--force`.
+Recurrence resolution remains CLI-owned. Future-scope deletion is non-atomic:
+the instance is deleted before the parent recurrence is patched. Patch failure
+returns non-zero plus structured `deleted=true`, exact target/parent IDs, and
+`seriesUpdated=false`; callers must read back both resources and repair
+manually rather than retrying blindly. Whole-calendar deletion
+(`calendar_delete_calendar`) remains absent under every selector.
 
 ### Calendar integration and specialized-field exclusions (E05)
 
@@ -287,7 +360,9 @@ The current schema bounds and defaults are normative alongside the registry:
   Draft update rebuilds the full MIME message: omitted `to` is preserved,
   omitted `cc`/`bcc` are cleared unless reply-all derives them, a lone plain or
   HTML body retains that content type, and both bodies produce multipart
-  alternative. Explicit-ID archive/read-state arrays accept 1–1,000 IDs.
+  alternative. Explicit-ID archive/read-state arrays and
+  `gmail_trash_messages` accept 1–1,000 IDs; trash IDs are alphanumeric and
+  remain recoverable through Gmail's `TRASH` label.
 - Calendar event/search results are 1–250 (default 10), calendar listing is
   1–250 (default 100), and event/conflict `days` is 0–31. `calendar_events`
   accepts a nonempty opaque `page_token` forwarded unchanged as
@@ -297,6 +372,10 @@ The current schema bounds and defaults are normative alongside the registry:
   Calendar-ID arrays are capped at 100, event attendees/recurrence at 100,
   reminders at 5, and Focus Time recurrence at 100. Event notifications
   default to `none`; `calendar_update_event` leaves omitted fields unchanged.
+  `calendar_delete_event` requires `calendar_id`, `event_id`, and scope
+  (`single`, `future`, or `all`); `original_start` is required for single/future
+  and rejected for all. The adapter appends `--force` and leaves recurrence
+  resolution to the CLI.
   Supplied empty `summary`, `description`, `location`, `attendees`, `rrule`,
   `reminders`, or `event_color` values serialize explicit clears. Supplied
   guest-permission `false` values serialize disables. Empty `scope` or
@@ -315,10 +394,15 @@ The current schema bounds and defaults are normative alongside the registry:
 
 MCP does not make child commands transactional. The standard structured result
 always preserves `exit_code`, parsed `stdout`, and `stderr`; a non-zero result
-does not roll back provider effects. Gmail thread/label handlers preserve
-per-item success/error records, while the explicit-ID schema caps one MCP call
-at 1,000 IDs and therefore does not span multiple direct-CLI `BatchModify`
-chunks. The direct CLI may process those chunks; MCP does not add rollback.
+does not roll back provider effects. Gmail archive and thread/label handlers
+preserve per-item success/error records where their CLI contracts do so.
+`gmail_trash_messages` is different: its bounded 1–1,000-ID call is one
+aggregate `BatchModify` request, so success exposes only aggregate
+action/count/labels and provider failure exposes the standard non-zero
+envelope without per-item evidence. Provider effects are indeterminate on
+failure. The direct CLI may process more than 1,000 IDs in multiple
+`BatchModify` chunks; MCP's bound prevents one call from crossing that chunk
+boundary.
 `docs_create` may leave a created Doc when its post-create pageless update
 fails. `sheets_create` keeps a successfully created spreadsheet when an
 advisory parent move fails (`movedToParent=false`, `moveError`, and a warning
@@ -581,7 +665,7 @@ Drive hierarchy semantics:
 - `GOG_CALENDAR_WEEKDAY=1` defaults `--weekday` for `gog calendar events`
 - `gog calendar create <calendarId> --summary S --from DT --to DT [--timezone TZ] [--start-timezone TZ] [--end-timezone TZ] [--description D] [--location L|--location-search Q|--place-id ID] [--place-language LANG] [--place-region REGION] [--attendees a@b.com,c@d.com] [--all-day] [--event-type TYPE]`
 - `gog calendar update <calendarId> <eventId> [--summary S] [--from DT] [--to DT] [--start-timezone TZ] [--end-timezone TZ] [--description D] [--location L|--location-search Q|--place-id ID] [--place-language LANG] [--place-region REGION] [--attendees ...] [--add-attendee ...] [--attachment URL ...] [--all-day] [--with-meet|--regenerate-meet] [--event-type TYPE]`
-- `gog calendar delete <calendarId> <eventId>`
+- `gog calendar delete <calendarId> <eventId> [--scope single|future|all] [--original-start DT] [--send-updates all|externalOnly|none] [--force]`
 - `gog calendar freebusy [calendarIds] [--cal ID_OR_NAME] [--calendars CSV] [--all] --from RFC3339 --to RFC3339`
 - `gog calendar conflicts [--cal ID_OR_NAME] [--calendars CSV] [--all] [--from RFC3339|date|relative] [--to RFC3339|date|relative] [--today|--week|--days N]`
 - `gog calendar respond <calendarId> <eventId> --status accepted|declined|tentative [--send-updates all|none|externalOnly]`
@@ -892,13 +976,13 @@ MCP tools use three risk classes in their protocol annotations:
 | --- | ---: | ---: | --- |
 | Read | `true` | `false` | Existing read-only default |
 | Write | `false` | `false` | Existing write authorization |
-| Destructive | `false` | `true` | Ordinary write authorization plus explicit `destructive` or exact-tool selection; no destructive domain tools yet |
+| Destructive | `false` | `true` | Ordinary write authorization plus explicit `destructive` or exact-tool selection; all six X01–X06 tools use this gate |
 
 Every class keeps `openWorldHint=true` because MCP calls Google services.
-R01 supplied the third risk class and annotations. R02 adds the fail-closed
-destructive selection gate without registering a destructive domain tool:
-legacy/broad selectors never authorize that class, and readonly mode suppresses
-it even when both gates are configured.
+R01 supplied the third risk class and annotations. R02/R03 add the fail-closed
+destructive selection gate used by X01–X06: legacy and broad selectors never
+authorize that class, and readonly mode suppresses it even when both gates are
+configured.
 
 ### Slides filesystem exclusion (E06)
 

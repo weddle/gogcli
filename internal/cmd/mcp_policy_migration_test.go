@@ -91,7 +91,7 @@ func TestMCPDestructivePolicyMigrationLegacyRuntimeMatrix(t *testing.T) {
 				t.Fatalf("calendar_update_event visible = %t, want %t; tools=%#v", got, tt.wantWrite, toolNames(tools))
 			}
 			if hasMCPTool(tools, "calendar_delete_event") {
-				t.Fatal("legacy runtime exposed a destructive fixture")
+				t.Fatal("legacy runtime exposed a destructive tool")
 			}
 		})
 	}
@@ -245,7 +245,7 @@ func TestMCPDestructivePolicyMigrationPersistentMatrix(t *testing.T) {
 				t.Fatalf("calendar_update_event visible = %t, want %t; tools=%#v policy=%#v", got, tt.wantWrite, toolNames(tools), policy)
 			}
 			if got := mcpMigrationDestructiveVisible(policy, tt.runtime, tt.flags); got != tt.wantDestroy {
-				t.Fatalf("destructive fixture visible = %t, want %t; policy=%#v runtime=%#v flags=%#v", got, tt.wantDestroy, policy, tt.runtime, tt.flags)
+				t.Fatalf("destructive tool visible = %t, want %t; policy=%#v runtime=%#v flags=%#v", got, tt.wantDestroy, policy, tt.runtime, tt.flags)
 			}
 		})
 	}
@@ -295,7 +295,7 @@ func TestMCPDestructivePolicyMigrationValidationMatrix(t *testing.T) {
 		{name: "empty selector value", policy: config.MCPPolicy{AllowTools: []string{"", "  "}}, wantErr: true},
 		{name: "unknown selector", policy: config.MCPPolicy{AllowTools: []string{"future_tool"}}, wantErr: true},
 		{name: "unknown destructive wildcard", policy: config.MCPPolicy{AllowTools: []string{"destructive.*"}, AllowWrite: true}, wantErr: true},
-		{name: "future exact destructive selector before registration", policy: config.MCPPolicy{AllowTools: []string{"calendar_delete_event"}, AllowWrite: true}, wantErr: true},
+		{name: "exact registered destructive selector", policy: config.MCPPolicy{AllowTools: []string{"calendar_delete_event"}, AllowWrite: true}, wantSelectors: []string{"calendar_delete_event"}},
 		{name: "write authorization without selector", policy: config.MCPPolicy{AllowWrite: true}, wantErr: true},
 	}
 

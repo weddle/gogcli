@@ -100,6 +100,19 @@ func (c *DriveShareCmd) Run(ctx context.Context, flags *RootFlags) error {
 
 	link, err := driveWebLink(ctx, svc, fileID)
 	if err != nil {
+		// Permission creation is not atomic with the follow-up link lookup. Keep
+		// the created permission ID visible so callers can reverse this grant
+		// exactly with drive_unshare, while returning the provider error unchanged.
+		if created.Id != "" {
+			if outfmt.IsJSON(ctx) {
+				_ = outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
+					"permissionId": created.Id,
+					"permission":   created,
+				})
+			} else {
+				u.Out().Linef("permission_id\t%s", created.Id)
+			}
+		}
 		return err
 	}
 

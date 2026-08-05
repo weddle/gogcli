@@ -10,22 +10,56 @@
 - MCP: add optional typed `drive_search.drive_id` shared-drive scoping via the existing `--drive` flag; paging and `all_drives` toggles remain outside the MCP surface.
 - MCP: add typed, bounded `calendar_events` paging with opaque `page_token`, explicit `all_pages`, mutual-exclusion validation, and preserved API page envelopes.
 - MCP: add `gmail_update_draft` as an ordinary Write tool over the existing full-message-rebuild CLI path: omitted `to` is preserved, omitted `cc`/`bcc` are cleared unless reply-all derives them, attachments and reply lineage are preserved, and send, file, attachment-change, path, or generic argv inputs remain excluded.
+- MCP: register the explicitly authorized destructive `gmail_delete_draft` tool
+  with a closed `draft_id` schema and server-controlled `--force`; drafts are
+  permanently deleted and are not recoverable from Trash.
 - MCP: add `calendar_update_event` as an ordinary Write tool with explicit partial-update presence semantics, serialized clears for supported empty summary/description/location/attendees/rrule/reminders/event-color fields, recurring-event scope, and `send_updates=none` by default; integrations, attachments, and specialized Calendar event types remain excluded.
 - Drive: add a shared `--max-bytes` raw-content cap to download/export, with inclusive boundary detection and fail-closed temporary output cleanup.
-- MCP: add fail-closed destructive authorization infrastructure. Future
-  Destructive tools require ordinary write authorization plus an explicit
-  `destructive` or exact-tool selector; existing broad Read/Write selectors do
-  not acquire them, and no destructive domain tool is registered yet.
-- MCP: document the Wave C registry snapshot (48 typed tools: 19 Read, 29
-  ordinary Write, and no Destructive tools), future-expanding broad selectors
-  for ordinary tools, and the bounded B04 Drive download Read surface. Gmail
-  send and Calendar deletion remain separate excluded surfaces.
+- MCP: register explicitly authorized destructive `calendar_delete_event` with
+  required calendar/event IDs and recurrence scope, conditional
+  `original_start`, safe `send_updates=none` default, server-controlled
+  `--force`, and a closed schema; whole-calendar deletion remains excluded.
+  Future-scope deletion precomputes recurrence changes before deleting, and a
+  subsequent parent-patch failure returns non-zero with the deleted instance
+  and parent IDs plus `seriesUpdated=false` for manual read-back and repair;
+  blind retry is unsafe.
+- MCP: register destructive `gmail_trash_messages` with a closed, bounded
+  1–1,000 explicit-message-ID schema and one aggregate `BatchModify` request.
+  It preserves recoverable Gmail Trash behavior, exposes aggregate
+  action/count/label output plus a typed error envelope on provider failure,
+  and never fabricates per-item evidence. Query/max, thread,
+  permanent-delete, force, and generic argv inputs remain excluded. Ordinary
+  message/thread label tools reject adding `TRASH`, preventing a bypass of
+  explicit destructive authorization and leaving thread trash unavailable.
+- MCP: register destructive `drive_share_user` with a closed user-only grant
+  schema (`file_id`, plain email, and reader/commenter/writer role defaulting
+  to reader); target, notification, and discoverability controls are fixed.
+- MCP/Drive: preserve the created `permissionId` and permission evidence when
+  `drive_share_user` creates a grant but its follow-up web-link lookup fails.
+  The provider error and non-zero MCP status remain visible; the operation is
+  documented as a non-atomic residual grant with exact-ID `drive_unshare`
+  cleanup, and no compensation delete obscures the original failure.
+- MCP: register destructive `drive_unshare` with a closed
+  `file_id`/`permission_id` schema, server-controlled `--force`, exact
+  permission-only argv, and the V02 read-before-mutation workflow.
+- MCP: add fail-closed destructive authorization infrastructure. Destructive
+  tools require ordinary write authorization plus an explicit `destructive` or
+  exact-tool selector; broad Read/Write selectors never acquire X01–X06.
+- MCP: register the `drive_trash` Destructive tool. It accepts only an
+  explicit `file_id`, invokes default Drive trashing with server-controlled
+  `--force`, and keeps permanent deletion, path, stdin, and generic argv
+  inputs out of the closed schema.
+- MCP: document the final Wave D registry snapshot (54 typed tools: 19 Read,
+  29 ordinary Write, and 6 Destructive), future-expanding ordinary selectors,
+  and the bounded B04 Drive download Read surface. Gmail send/permanent message
+  deletion, Drive upload/permanent deletion, and whole-calendar deletion remain
+  excluded.
 - Sheets/MCP: document concrete-A1 row and column overflow rejection for
   literal `values_json` while preserving strict JSON, numeric precision, and
   named/open-ended range compatibility.
-- MCP: record E03's explicit exclusion of Drive permanent delete, upload,
-  share/unshare, host paths, stdin, and `@file` transport, while retaining
-  B01's approved bounded inline-base64 transport decision.
+- MCP: record E03's explicit exclusion of Drive permanent delete, upload, host
+  paths, stdin, and `@file` transport, while retaining the narrow destructive
+  trash/share-user/unshare contracts and B01's bounded inline-base64 decision.
 - MCP: implement the reusable bounded inline binary encoder selected by B01,
   with padded standard base64, direct structured content, MIME/name/size
   metadata, a 65,536-byte inclusive raw cap, and atomic output-cap errors.
@@ -34,7 +68,9 @@
   uses fixed server-side raw capture, and never returns a host path or partial
   base64.
 - MCP: document tool-specific bounds/defaults and structured partial-failure
-  hazards, including non-atomic Docs, Sheets, Slides, and Gmail operations.
+  hazards for non-atomic Docs, Sheets, Slides, and Gmail archive/thread/label
+  operations; X03 trash uses one aggregate `BatchModify` request per bounded
+  MCP call.
 - MCP: document C10's out-of-band cleanup: create the secondary calendar,
   record its returned calendar ID, then run `gog calendar delete-calendar CALENDAR_ID`.
   Also disclose C05's CLI detection order and non-global sorting, plus V06's

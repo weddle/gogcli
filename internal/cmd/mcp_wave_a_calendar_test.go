@@ -678,7 +678,7 @@ func TestMCPWaveACalendarSchemasAreClosedAndExcludeDeferredSurfaces(t *testing.T
 			}
 		})
 	}
-	for _, forbidden := range []string{"calendar_delete_event", "calendar_delete_calendar", "calendar_integrations", "calendar_acl"} {
+	for _, forbidden := range []string{"calendar_delete_calendar", "calendar_integrations", "calendar_acl"} {
 		if hasMCPTool(mcpAllTools(), forbidden) {
 			t.Fatalf("deferred Calendar tool %q exposed", forbidden)
 		}

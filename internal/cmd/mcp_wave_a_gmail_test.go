@@ -836,6 +836,8 @@ func TestMCPWaveAGmailLabelMutationContractsAndResolvedOutput(t *testing.T) {
 			for _, args := range []map[string]any{
 				{tc.field: tc.id},
 				{tc.field: " \t", "add": "INBOX"},
+				{tc.field: tc.id, "add": "TRASH"},
+				{tc.field: tc.id, "add": "STARRED, trash"},
 			} {
 				if _, err := findMCPTool(t, tc.tool).BuildArgs(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: args}}); err == nil {
 					t.Fatalf("BuildArgs accepted invalid labels input %#v", args)
@@ -905,8 +907,8 @@ func TestMCPWaveAGmailExplicitIDMutationSchemasAndBoundaries(t *testing.T) {
 		field  string
 		prefix []string
 	}{
-		{tool: "gmail_archive_messages", field: "message_ids", prefix: []string{"gmail", "archive"}},
-		{tool: "gmail_archive_threads", field: "thread_ids", prefix: []string{"gmail", "archive", "--thread"}},
+		{tool: "gmail_archive_messages", field: "message_ids", prefix: []string{"gmail", "archive", "--"}},
+		{tool: "gmail_archive_threads", field: "thread_ids", prefix: []string{"gmail", "archive", "--thread", "--"}},
 		{tool: "gmail_mark_messages_read", field: "message_ids", prefix: []string{"gmail", "mark-read", "--"}},
 		{tool: "gmail_mark_messages_unread", field: "message_ids", prefix: []string{"gmail", "unread", "--"}},
 	}

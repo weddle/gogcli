@@ -126,8 +126,8 @@ func mcpEnabledToolsWithPolicy(cmd McpCmd, flags *RootFlags, policy config.MCPPo
 
 func mcpSelectorMatchesAnyTool(selector string) bool {
 	if selector == string(mcpRiskDestructive) {
-		// Keep the explicit class selector valid even before a destructive
-		// domain tool is registered. It is an opt-in capability ceiling.
+		// Keep the explicit class selector valid even when the registered
+		// destructive inventory changes. It is an opt-in capability ceiling.
 		return true
 	}
 	for _, tool := range mcpAllTools() {

@@ -762,9 +762,20 @@ func TestMCPE03NativeExclusionsIncludeExplicitReadSelector(t *testing.T) {
 	}
 	for _, selector := range selectors {
 		tools := mcpEnabledTools(selector)
-		for _, forbidden := range []string{"drive_upload", "drive_delete", "drive_trash", "drive_share", "drive_unshare"} {
+		for _, forbidden := range []string{"drive_upload", "drive_delete"} {
 			if hasMCPTool(tools, forbidden) {
 				t.Fatalf("selector %#v exposed forbidden tool %q", selector.AllowTool, forbidden)
+			}
+		}
+	}
+
+	for _, allowed := range []string{"drive_trash", "drive_share_user", "drive_unshare"} {
+		if !hasMCPTool(mcpEnabledTools(McpCmd{AllowWrite: true, AllowTool: []string{"destructive"}}), allowed) {
+			t.Fatalf("destructive selector omitted allowed Drive tool %q", allowed)
+		}
+		for _, selector := range []string{"write", "drive", "drive.*", "all", "*"} {
+			if hasMCPTool(mcpEnabledTools(McpCmd{AllowWrite: true, AllowTool: []string{selector}}), allowed) {
+				t.Fatalf("ordinary selector %q exposed allowed Drive destructive tool %q", selector, allowed)
 			}
 		}
 	}

@@ -209,6 +209,89 @@ func TestMCPE05CalendarZoomOutputRedactionFixture(t *testing.T) {
 	}
 }
 
+func TestMCPE04CalendarWholeCalendarDeletionAbsentAcrossSelectors(t *testing.T) {
+	const forbidden = "calendar_delete_calendar"
+	for _, tool := range mcpAllTools() {
+		if tool.Name == forbidden || strings.Contains(strings.ReplaceAll(tool.Name, "_", "-"), "delete-calendar") {
+			t.Fatalf("whole-calendar deletion tool registered: %q", tool.Name)
+		}
+	}
+
+	selectors := []struct {
+		name string
+		cmd  McpCmd
+	}{
+		{name: "default", cmd: McpCmd{}},
+		{name: "read", cmd: McpCmd{AllowTool: []string{"read"}}},
+		{name: "write", cmd: McpCmd{AllowWrite: true, AllowTool: []string{"write"}}},
+		{name: "calendar", cmd: McpCmd{AllowWrite: true, AllowTool: []string{"calendar"}}},
+		{name: "calendar wildcard", cmd: McpCmd{AllowWrite: true, AllowTool: []string{"calendar.*"}}},
+		{name: "destructive", cmd: McpCmd{AllowWrite: true, AllowTool: []string{"destructive"}}},
+		{name: "star", cmd: McpCmd{AllowWrite: true, AllowTool: []string{"*"}}},
+		{name: "all", cmd: McpCmd{AllowWrite: true, AllowTool: []string{"all"}}},
+		{name: "whole-calendar exact", cmd: McpCmd{AllowWrite: true, AllowTool: []string{forbidden}}},
+	}
+	for _, selector := range selectors {
+		t.Run(selector.name, func(t *testing.T) {
+			tools := mcpEnabledTools(selector.cmd)
+			for _, tool := range tools {
+				if tool.Name == forbidden || strings.Contains(strings.ReplaceAll(tool.Name, "_", "-"), "delete-calendar") {
+					t.Fatalf("selector %#v exposed whole-calendar deletion tool %q", selector.cmd.AllowTool, tool.Name)
+				}
+			}
+		})
+	}
+}
+
+func TestMCPE04CalendarEventDeletionCannotReachWholeCalendarOrGenericArgv(t *testing.T) {
+	spec := findMCPTool(t, "calendar_delete_event")
+	schema := newMCPTool(spec).InputSchema
+	if closed, ok := schema.AdditionalProperties.(bool); !ok || closed {
+		t.Fatalf("calendar_delete_event schema AdditionalProperties = %#v, want false", schema.AdditionalProperties)
+	}
+	for _, field := range []string{"argv", "args", "command", "generic", "raw", "operation", "action", "calendar", "calendar_name", "force"} {
+		if _, exposed := schema.Properties[field]; exposed {
+			t.Fatalf("calendar_delete_event schema exposes generic or whole-calendar field %q", field)
+		}
+	}
+
+	base := map[string]any{"calendar_id": "primary", "event_id": "event-1", "scope": "all"}
+	calls := map[string]int{}
+	client := newCalendarMCPValidationClient(t, []string{"calendar_delete_event"}, calls)
+	for _, field := range []string{"argv", "args", "command", "generic"} {
+		t.Run(field, func(t *testing.T) {
+			arguments := cloneCalendarArguments(base)
+			arguments[field] = []any{"calendar", "delete-calendar", "primary"}
+			before := calls["calendar_delete_event"]
+			request := calendarMCPRequest(arguments)
+			request.Params.Name = "calendar_delete_event"
+			result, err := client.CallTool(t.Context(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.IsError || calls["calendar_delete_event"] != before {
+				t.Fatalf("generic field %q reached calendar_delete_event: error=%v calls=%d", field, result.IsError, calls["calendar_delete_event"])
+			}
+			if !strings.Contains(mcpResultText(result), field) {
+				t.Fatalf("schema error = %q, want field %q", mcpResultText(result), field)
+			}
+		})
+	}
+	eventArgs, err := spec.BuildArgs(calendarMCPRequest(base))
+	if err != nil {
+		t.Fatalf("calendar_delete_event valid event arguments: %v", err)
+	}
+	for _, arg := range eventArgs {
+		if strings.Contains(arg, "delete-calendar") {
+			t.Fatalf("calendar_delete_event argv reached whole-calendar command: %#v", eventArgs)
+		}
+	}
+
+	if _, err := spec.BuildArgs(calendarMCPRequest(map[string]any{"calendar_id": "primary", "scope": "all"})); err == nil || !strings.Contains(err.Error(), "event_id") {
+		t.Fatalf("calendar_delete_event accepted whole-calendar-shaped arguments: %v", err)
+	}
+}
+
 type mcpE05CalendarExcludedField struct {
 	name  string
 	value any

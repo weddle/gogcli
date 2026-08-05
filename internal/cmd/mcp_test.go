@@ -50,11 +50,52 @@ func TestMCPToolRiskAnnotations(t *testing.T) {
 	}
 }
 
-func TestMCPRegistryHasNoDestructiveTools(t *testing.T) {
+func TestMCPRegistryDestructiveInventoryAndPolicy(t *testing.T) {
+	want := []string{
+		"gmail_delete_draft",
+		"gmail_trash_messages",
+		"calendar_delete_event",
+		"drive_trash",
+		"drive_share_user",
+		"drive_unshare",
+	}
+	counts := map[mcpToolRisk]int{}
+	var got []string
 	for _, tool := range mcpAllTools() {
+		counts[tool.Risk]++
 		if tool.Risk == mcpRiskDestructive {
-			t.Fatalf("unexpected destructive MCP tool %q", tool.Name)
+			got = append(got, tool.Name)
 		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("destructive registry = %#v, want %#v", got, want)
+	}
+	if counts[mcpRiskRead] != 19 || counts[mcpRiskWrite] != 29 || counts[mcpRiskDestructive] != len(want) {
+		t.Fatalf("registry risk counts = %#v, want read=19 write=29 destructive=%d", counts, len(want))
+	}
+
+	for _, selector := range []string{"write", "gmail", "gmail.*", "calendar", "drive", "drive.*", "all", "*"} {
+		tools := mcpEnabledTools(McpCmd{AllowWrite: true, AllowTool: []string{selector}})
+		for _, name := range want {
+			if hasMCPTool(tools, name) {
+				t.Fatalf("broad selector %q exposed destructive tool %q", selector, name)
+			}
+		}
+	}
+	if tools := mcpEnabledTools(McpCmd{AllowTool: []string{"destructive"}}); len(tools) != 0 {
+		t.Fatalf("destructive selector without write authorization exposed %#v", toolNames(tools))
+	}
+	if tools := mcpEnabledTools(McpCmd{AllowWrite: true, AllowTool: []string{"destructive"}}); !slices.Equal(toolNames(tools), want) {
+		t.Fatalf("destructive selector inventory = %#v, want %#v", toolNames(tools), want)
+	}
+	for _, name := range want {
+		tools := mcpEnabledTools(McpCmd{AllowWrite: true, AllowTool: []string{name}})
+		if !hasMCPTool(tools, name) {
+			t.Fatalf("exact destructive selector omitted %q", name)
+		}
+	}
+	if tools := mcpEnabledToolsNoPolicy(McpCmd{AllowWrite: true, AllowTool: []string{"destructive"}}, &RootFlags{ReadOnly: true}); len(tools) != 0 {
+		t.Fatalf("readonly runtime exposed destructive tools: %#v", toolNames(tools))
 	}
 }
 
@@ -2230,8 +2271,8 @@ func TestMCPWaveAAdaptersBuildExactArgsAndPolicy(t *testing.T) {
 		{"gmail_create_draft", mcpRiskWrite, map[string]any{"subject": "subject", "body": "body"}, []string{"gmail", "drafts", "create", "--subject", "subject", "--body", "body"}},
 		{"gmail_modify_message_labels", mcpRiskWrite, map[string]any{"message_id": "m1", "add": "STARRED"}, []string{"gmail", "messages", "modify", "--add", "STARRED", "--", "m1"}},
 		{"gmail_modify_thread_labels", mcpRiskWrite, map[string]any{"thread_id": "t1", "remove": "INBOX"}, []string{"gmail", "thread", "modify", "--remove", "INBOX", "--", "t1"}},
-		{"gmail_archive_messages", mcpRiskWrite, map[string]any{"message_ids": []string{"m1", "m2"}}, []string{"gmail", "archive", "m1", "m2"}},
-		{"gmail_archive_threads", mcpRiskWrite, map[string]any{"thread_ids": []string{"t1", "t2"}}, []string{"gmail", "archive", "--thread", "t1", "t2"}},
+		{"gmail_archive_messages", mcpRiskWrite, map[string]any{"message_ids": []string{"m1", "m2"}}, []string{"gmail", "archive", "--", "m1", "m2"}},
+		{"gmail_archive_threads", mcpRiskWrite, map[string]any{"thread_ids": []string{"t1", "t2"}}, []string{"gmail", "archive", "--thread", "--", "t1", "t2"}},
 		{"gmail_mark_messages_read", mcpRiskWrite, map[string]any{"message_ids": []string{"m1"}}, []string{"gmail", "mark-read", "--", "m1"}},
 		{"gmail_mark_messages_unread", mcpRiskWrite, map[string]any{"message_ids": []string{"m1"}}, []string{"gmail", "unread", "--", "m1"}},
 		{"calendar_list_calendars", mcpRiskRead, nil, []string{"calendar", "calendars", "--max", "100"}},
@@ -2440,12 +2481,26 @@ func TestMCPE03DriveExclusionsAcrossSelectorsSchemasAndArgv(t *testing.T) {
 		{AllowWrite: true, AllowTool: []string{"destructive"}},
 		{AllowWrite: true, AllowTool: []string{"all"}},
 	}
-	forbiddenTools := []string{"drive_upload", "drive_delete", "drive_trash", "drive_share", "drive_unshare"}
+	forbiddenTools := []string{"drive_upload", "drive_delete", "drive_permanent_delete", "drive_permanently_delete"}
 	for _, cmd := range selectors {
 		tools := mcpEnabledTools(cmd)
 		for _, forbidden := range forbiddenTools {
 			if hasMCPTool(tools, forbidden) {
 				t.Fatalf("selector %#v exposed forbidden tool %q", cmd.AllowTool, forbidden)
+			}
+		}
+	}
+	allowedDestructive := []string{"drive_trash", "drive_share_user", "drive_unshare"}
+	for _, name := range allowedDestructive {
+		if !hasMCPTool(mcpEnabledTools(McpCmd{AllowWrite: true, AllowTool: []string{"destructive"}}), name) {
+			t.Fatalf("destructive selector omitted allowed Drive mutation %q", name)
+		}
+		if !hasMCPTool(mcpEnabledTools(McpCmd{AllowWrite: true, AllowTool: []string{name}}), name) {
+			t.Fatalf("exact destructive selector omitted allowed Drive mutation %q", name)
+		}
+		for _, selector := range []string{"write", "drive", "drive.*", "all", "*"} {
+			if hasMCPTool(mcpEnabledTools(McpCmd{AllowWrite: true, AllowTool: []string{selector}}), name) {
+				t.Fatalf("ordinary selector %q exposed allowed destructive Drive mutation %q", selector, name)
 			}
 		}
 	}
@@ -2455,7 +2510,7 @@ func TestMCPE03DriveExclusionsAcrossSelectorsSchemasAndArgv(t *testing.T) {
 			continue
 		}
 		properties := newMCPTool(spec).InputSchema.Properties
-		for _, field := range []string{"local_path", "path", "stdin", "argv", "output_path", "replacements_file", "markdown_file"} {
+		for _, field := range []string{"local_path", "path", "stdin", "argv", "output_path", "permanent", "replacements_file", "markdown_file"} {
 			if _, exposed := properties[field]; exposed {
 				t.Fatalf("tool %q exposes forbidden field %q", spec.Name, field)
 			}
