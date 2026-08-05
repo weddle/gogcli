@@ -4,6 +4,26 @@
 
 - Dependencies: update the Go developer tools, pnpm, and email-tracking worker transitive pins to their latest releases.
 - Docs: rewrite the README as a concise front door and move task examples into a dedicated guide.
+- MCP: reject explicitly empty `docs_write` tabs before execution and preserve exact argv for append, replace, markdown, tab, and leading-dash text inputs.
+- MCP: add default read-only `drive_list_folder` with bounded folder paging and explicit shared-drive inclusion over `drive ls`.
+- MCP: add bounded typed Gmail, Calendar, Drive, Docs, Sheets, and Slides tools with closed schemas, deterministic service ordering, inline-only drafts/comments, and explicit safety-policy exclusions.
+- MCP: document the Wave A registry snapshot (45 typed tools: 18 Read, 27
+  ordinary Write, and no Destructive tools), future-expanding broad selectors
+  for ordinary tools, and the deferred G05 (Gmail draft update), C07 (Calendar
+  event update), R02, and B02–B04 scope. Gmail send and Calendar deletion
+  remain separate excluded surfaces.
+- Sheets/MCP: document concrete-A1 row and column overflow rejection for
+  literal `values_json` while preserving strict JSON, numeric precision, and
+  named/open-ended range compatibility.
+- MCP: record E03's explicit exclusion of Drive permanent delete, upload,
+  download, share/unshare, host paths, stdin, and `@file` transport, while
+  retaining B01's approved bounded inline-base64 decision as specification-only.
+- MCP: document tool-specific bounds/defaults and structured partial-failure
+  hazards, including non-atomic Docs, Sheets, Slides, and Gmail operations.
+- MCP: document C10's out-of-band cleanup: create the secondary calendar,
+  record its returned calendar ID, then run `gog calendar delete-calendar CALENDAR_ID`.
+  Also disclose C05's CLI detection order and non-global sorting, plus V06's
+  source pre-read and shallow folder-copy semantics.
 
 ## 0.34.2 - 2026-08-02
 
